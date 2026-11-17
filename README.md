@@ -1,0 +1,2 @@
+# tradingtool
+myowntradingtool
