@@ -25,6 +25,8 @@ main_tab1, main_tab2, main_tab3 = st.tabs([
 # HELPER: DATA CLEANER & INDICATOR ENGINE
 # ========================================================
 def clean_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
     if isinstance(df.columns, pd.MultiIndex):
         lvl0 = [str(c).lower() for c in df.columns.get_level_values(0)]
         if 'close' in lvl0 or 'open' in lvl0:
@@ -358,7 +360,7 @@ with main_tab2:
 # ========================================================
 with main_tab3:
     st.header("🎯 Intraday Option Momentum & Volatility Extension System")
-    st.caption("Multi-Timeframe Confluence Engine (15M Execution Ladder, Hourly Trend, Daily PDH/PDL, and Monthly PMH/PML)")
+    st.caption("Multi-Timeframe Top-Down Engine: 15M Target Ladder, Hourly Momentum, Daily PDH/PDL, and Monthly PMH/PML")
 
     PRESET_TICKERS = {
         "NIFTY 50 (NSE)": "^NSEI",
@@ -389,32 +391,27 @@ with main_tab3:
             st.cache_data.clear()
             st.rerun()
 
-    # --- Data Fetching for All 4 Timeframes ---
+    # --- Multi-Timeframe Data Acquisition ---
     @st.cache_data(ttl=60)
     def fetch_all_timeframes(symbol):
-        # 1. 15-Minute Data
-        df_15m = yf.download(symbol, period="30d", interval="15m", progress=False)
-        # 2. 1-Hour Data
-        df_1h = yf.download(symbol, period="60d", interval="1h", progress=False)
-        # 3. Daily Data
-        df_1d = yf.download(symbol, period="1y", interval="1d", progress=False)
-        # 4. Monthly Data
-        df_1mo = yf.download(symbol, period="5y", interval="1mo", progress=False)
-
+        d15_raw = yf.download(symbol, period="30d", interval="15m", progress=False)
+        d1h_raw = yf.download(symbol, period="60d", interval="1h", progress=False)
+        d1d_raw = yf.download(symbol, period="1y", interval="1d", progress=False)
+        d1m_raw = yf.download(symbol, period="5y", interval="1mo", progress=False)
         return (
-            clean_yfinance_columns(df_15m),
-            clean_yfinance_columns(df_1h),
-            clean_yfinance_columns(df_1d),
-            clean_yfinance_columns(df_1mo)
+            clean_yfinance_columns(d15_raw),
+            clean_yfinance_columns(d1h_raw),
+            clean_yfinance_columns(d1d_raw),
+            clean_yfinance_columns(d1m_raw)
         )
 
-    with st.spinner(f"Fetching 15M, 1H, Daily, and Monthly data for {user_ticker}..."):
+    with st.spinner(f"Acquiring 15M, 1H, Daily, and Monthly feeds for {user_ticker}..."):
         d15, d1h, d1d, d1mo = fetch_all_timeframes(user_ticker)
 
     if d15 is None or d15.empty or len(d15) < 15:
         st.error(f"Could not load intraday data for '{user_ticker}'. Please verify the symbol.")
     else:
-        # --- 15M Calculations (Volatility Extension Ladder) ---
+        # --- 15M Mathematical Engine (Volatility Ladder) ---
         hl_15 = d15['high'] - d15['low']
         hc_15 = (d15['high'] - d15['close'].shift(1)).abs()
         lc_15 = (d15['low'] - d15['close'].shift(1)).abs()
@@ -433,9 +430,10 @@ with main_tab3:
 
         risk_step = round(c_atr * 1.5, 2)
         half_step = round(risk_step / 2.0, 2)
+        display_name = chosen_preset.split('(')[0].strip()
 
         if is_bullish:
-            bias_title = f"CONTINUE VIEW UP — {chosen_preset.split('(')[0].strip()}"
+            bias_title = f"CONTINUE VIEW UP — {display_name}"
             box_bg = "#113b22"
             box_border = "#00FF66"
             fail_lvl = round(c_price - risk_step, 2)
@@ -450,7 +448,7 @@ with main_tab3:
                 ("N Extended Upper Range 4", r4), ("N Extended Upper Range 5", r5)
             ]
         elif is_bearish:
-            bias_title = f"CONTINUE VIEW DOWN — {chosen_preset.split('(')[0].strip()}"
+            bias_title = f"CONTINUE VIEW DOWN — {display_name}"
             box_bg = "#421616"
             box_border = "#FF4D4D"
             fail_lvl = round(c_price + risk_step, 2)
@@ -465,4 +463,93 @@ with main_tab3:
                 ("N Extended Lower Range 4", r4), ("N Extended Lower Range 5", r5)
             ]
         else:
-            bias_title = f"NEUTRAL / CONSOLIDATION —
+            bias_title = f"NEUTRAL / CONSOLIDATION — {display_name}"
+            box_bg = "#222222"
+            box_border = "#888888"
+            fail_lvl = round(c_price - risk_step, 2)
+            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
+            r1 = round(c_price + risk_step, 2)
+            r2 = round(r1 + half_step, 2)
+            r3 = round(r2 + half_step, 2)
+            r4 = round(r3 + half_step, 2)
+            r5 = round(r4 + half_step, 2)
+            ladder_labels = [
+                ("Range Level 1", r1), ("Range Level 2", r2), ("Range Level 3", r3),
+                ("Extended Range 4", r4), ("Extended Range 5", r5)
+            ]
+
+        # --- Daily Reference Calculations (PDH / PDL) ---
+        pdh_val, pdl_val = None, None
+        if d1d is not None and len(d1d) >= 2:
+            d1d['ema_21'] = d1d['close'].ewm(span=21, adjust=False).mean()
+            d1d['ema_50'] = d1d['close'].ewm(span=50, adjust=False).mean()
+            prev_day = d1d.iloc[-2]
+            pdh_val = float(prev_day['high'])
+            pdl_val = float(prev_day['low'])
+
+        # --- 1-Hour Calculations ---
+        if d1h is not None and len(d1h) >= 21:
+            d1h['ema_9'] = d1h['close'].ewm(span=9, adjust=False).mean()
+            d1h['ema_21'] = d1h['close'].ewm(span=21, adjust=False).mean()
+
+        # --- Monthly Reference Calculations (PMH / PML) ---
+        pmh_val, pml_val = None, None
+        if d1mo is not None and len(d1mo) >= 2:
+            prev_month = d1mo.iloc[-2]
+            pmh_val = float(prev_month['high'])
+            pml_val = float(prev_month['low'])
+
+        time_str = now_ist.strftime("%d %b %I:%M %p (IST)")
+        items_html = "".join([
+            f"<div style='background:rgba(255,255,255,0.08);padding:10px 14px;border-radius:6px;min-width:160px;margin:4px;display:inline-block;'>"
+            f"<div style='color:#B0B0B0;font-size:12px;'>{name}</div>"
+            f"<div style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{lvl:,.2f}</div>"
+            f"</div>"
+            for name, lvl in ladder_labels
+        ])
+
+        hud_card = (
+            f"<div style='background-color:{box_bg};border:2px solid {box_border};border-radius:10px;padding:20px;margin-bottom:20px;'>"
+            f"<h2 style='color:#FFFFFF;margin:0 0 4px 0;'>{bias_title}</h2>"
+            f"<div style='color:#E0E0E0;font-size:13px;margin-bottom:12px;'>📅 {time_str} | Current Price: <b>{c_price:,.2f}</b></div>"
+            f"<div style='background:rgba(0,0,0,0.35);padding:10px 16px;border-radius:6px;margin-bottom:14px;'>"
+            f"<span style='color:#FFAA00;font-weight:bold;font-size:15px;'>Move View Fail LVL: </span>"
+            f"<span style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{fail_str}</span>"
+            f"</div>"
+            f"<div style='display:flex;flex-wrap:wrap;gap:8px;'>"
+            f"{items_html}"
+            f"</div>"
+            f"</div>"
+        )
+        st.markdown(hud_card, unsafe_allow_html=True)
+
+        # Reference Scorecards
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Current Price", f"{c_price:,.2f}")
+        k2.metric("Fail Level", f"{fail_lvl:,.2f}")
+        k3.metric("Previous Day High (PDH)", f"{pdh_val:,.2f}" if pdh_val else "N/A")
+        k4.metric("Previous Day Low (PDL)", f"{pdl_val:,.2f}" if pdl_val else "N/A")
+
+        st.divider()
+
+        # Multi-Timeframe Chart Layout Tabs
+        chart_tab1, chart_tab2, chart_tab3, chart_tab4 = st.tabs([
+            "⚡ 15-Minute (Execution & Target Ladder)",
+            "📅 Daily (PDH / PDL Key Levels)",
+            "⏰ 1-Hour (Swing Trend Momentum)",
+            "🏛️ Monthly (PMH / PML Macro Levels)"
+        ])
+
+        # CHART 1: 15-Minute Execution Chart
+        with chart_tab1:
+            st.subheader(f"15-Minute Chart — Execution & Volatility Ladder ({user_ticker})")
+            p15 = d15.iloc[-90:]
+            f15 = go.Figure()
+            f15.add_trace(go.Candlestick(x=p15.index, open=p15['open'], high=p15['high'], low=p15['low'], close=p15['close'], name="15M Candle"))
+            f15.add_trace(go.Scatter(x=p15.index, y=p15['ema_9'], line=dict(color='cyan', width=1.5), name="9 EMA"))
+            f15.add_trace(go.Scatter(x=p15.index, y=p15['ema_21'], line=dict(color='magenta', width=1.5), name="21 EMA"))
+            f15.add_hline(y=fail_lvl, line=dict(color='#FFAA00', width=2, dash='dot'), annotation_text=f"Fail LVL: {fail_lvl:,.2f}")
+            c_ladder = ['#66FF66', '#33CC33', '#009900', '#006600', '#004400']
+            for i, (name, lvl) in enumerate(ladder_labels):
+                f15.add_hline(y=lvl, line=dict(color=c_ladder[i % len(c_ladder)], width=1, dash='dash'), annotation_text=f"{name}: {lvl:,.2f}")
+            f15.update_layout(height=620,
