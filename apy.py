@@ -14,8 +14,12 @@ st.set_page_config(page_title="Professional Trading Dashboard", layout="wide", p
 IST = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(IST)
 
-# Top Navigation Tabs
-main_tab1, main_tab2 = st.tabs(["🥇 Gold (XAU/USD) Dashboard", "🇮🇳 NSE Stocks Scanner"])
+# Top Navigation Tabs (Added 3rd dedicated unit)
+main_tab1, main_tab2, main_tab3 = st.tabs([
+    "🥇 Gold (XAU/USD) Dashboard", 
+    "🇮🇳 NSE Stocks Scanner",
+    "🎯 Intraday Option Momentum & Volatility Extension System"
+])
 
 # ========================================================
 # HELPER: STRATEGY 1 INDICATOR ENGINE (125-Bar Breakout)
@@ -23,7 +27,6 @@ main_tab1, main_tab2 = st.tabs(["🥇 Gold (XAU/USD) Dashboard", "🇮🇳 NSE S
 def clean_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Safely flattens MultiIndex columns from yfinance."""
     if isinstance(df.columns, pd.MultiIndex):
-        # Look for standard OHLCV columns in either level
         lvl0 = [str(c).lower() for c in df.columns.get_level_values(0)]
         if 'close' in lvl0 or 'open' in lvl0:
             df.columns = df.columns.get_level_values(0)
@@ -86,9 +89,6 @@ with main_tab1:
         horizontal=True
     )
 
-    # ----------------------------------------------------
-    # GOLD STRATEGY 2: 30M Session VWAP + 9 EMA + PDH/PDL
-    # ----------------------------------------------------
     if "Strategy 2" in gold_strategy:
         st.subheader("⚡ Gold Strategy 2: 30-Minute Session VWAP + 9 EMA + PDH / PDL")
         st.caption("Institutional intraday momentum: Session-reset VWAP, 9 EMA (Close), and Previous Day High/Low reference levels.")
@@ -106,10 +106,8 @@ with main_tab1:
             df = clean_yfinance_columns(df)
             df = df[['open', 'high', 'low', 'close', 'volume']].copy()
 
-            # 1. 9 EMA on Close
             df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
 
-            # 2. Session VWAP (Resets each calendar day)
             df['date'] = df.index.date
             typical_price = (df['high'] + df['low'] + df['close']) / 3.0
             df['tp_vol'] = typical_price * df['volume']
@@ -117,15 +115,12 @@ with main_tab1:
             df['cum_vol'] = df.groupby('date')['volume'].cumsum()
             df['vwap'] = df['cum_tp_vol'] / (df['cum_vol'] + 1e-9)
 
-            # 3. ATR 14 (30m)
             hl = df['high'] - df['low']
             hc = (df['high'] - df['close'].shift(1)).abs()
             lc = (df['low'] - df['close'].shift(1)).abs()
             tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
             df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
 
-            # 4. Filter Previous Day High (PDH) and Low (PDL)
-            # Filter out truncated sessions (e.g., Sunday 5-bar session) requiring at least 10 bars
             daily_counts = df.groupby('date').size()
             valid_full_days = daily_counts[daily_counts >= 10].index
 
@@ -155,7 +150,6 @@ with main_tab1:
             is_bullish = (cur_price > cur_vwap) and (cur_ema9 > cur_vwap)
             is_bearish = (cur_price < cur_vwap) and (cur_ema9 < cur_vwap)
 
-            # PDH / PDL Context
             if cur_price > pdh_val:
                 pd_status = "🚀 Above Previous Day High (PDH Breakout — Very Bullish)"
             elif cur_price < pdl_val:
@@ -180,7 +174,6 @@ with main_tab1:
                 sl_label, sl_val = "Stop-Loss", "-"
                 tgt_label, tgt_val = "Target", "-"
 
-            # Metrics
             m1, m2, m3, m4 = st.columns([1.2, 2.2, 1.3, 1.3])
             m1.metric("Live Gold Price (30M)", f"${cur_price:,.2f}")
             m2.markdown(f"**Signal** \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
@@ -189,7 +182,6 @@ with main_tab1:
 
             st.divider()
 
-            # Technical Checkpoints
             c_chk1, c_chk2, c_chk3, c_chk4 = st.columns(4)
             c_chk1.metric("Session VWAP", f"${cur_vwap:,.2f}")
             c_chk2.metric("9 EMA (Close)", f"${cur_ema9:,.2f}")
@@ -199,7 +191,6 @@ with main_tab1:
             st.info(f"**PDH/PDL Context:** {pd_status}")
             st.divider()
 
-            # Chart
             st.subheader("Gold 30-Minute Chart (Session VWAP + 9 EMA + PDH + PDL)")
             plot_df = df_30m.iloc[-150:]
 
@@ -216,9 +207,6 @@ with main_tab1:
             fig.update_layout(height=720, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=30, l=30, r=30))
             st.plotly_chart(fig, use_container_width=True)
 
-    # ----------------------------------------------------
-    # GOLD STRATEGY 1: 125-BAR BREAKOUT
-    # ----------------------------------------------------
     else:
         st.subheader("🏆 Gold Strategy 1: 125-Bar Breakout + Volume (Multi-Timeframe)")
         c_g1, c_g2 = st.columns([2, 1])
@@ -244,7 +232,6 @@ with main_tab1:
 
         @st.cache_data(ttl=120)
         def fetch_gold(interval_val, period_val):
-            # Resample into authentic 4H bars if 4H is selected
             if interval_val == "4h":
                 raw_df = yf.download("GC=F", period=period_val, interval="1h", progress=False)
                 if raw_df.empty:
@@ -272,14 +259,9 @@ with main_tab1:
             high_125 = round(float(row['high_125']), 2)
             atr_val = round(float(row['atr']), 2)
             vol_ratio = round(float(row['volume']) / (float(row['vol_sma_125']) + 1e-9), 2)
-            pct_diff = round(((close - high_125) / high_125) * 100, 2)
 
             c_a = close >= high_125
             c_b = vol_ratio >= 1.0
-            c_c = row['rsi'] < 70
-            c_d = row['atr'] > row['atr_sma_50']
-            c_e = row['close'] > row['sma_50']
-            c_f = row['ema_21'] > row['ema_50']
             is_bearish_ema = row['ema_21'] < row['ema_50']
 
             if c_a and c_b:
@@ -361,7 +343,6 @@ with main_tab2:
     def analyze_nse_stock(symbol, tf_interval, tf_period, label_str):
         ticker = f"{symbol}.NS"
         df = None
-        # Robust 2-attempt fetch to mitigate transient rate-limiting
         for attempt in range(2):
             try:
                 df = yf.download(ticker, period=tf_period, interval=tf_interval, progress=False)
@@ -483,3 +464,141 @@ with main_tab2:
         cols_sell = ["Signal", "Stock", "Price", "RSI"]
         df_sells = pd.DataFrame(sells)[[c for c in cols_sell if c in pd.DataFrame(sells).columns]]
         st.dataframe(df_sells, use_container_width=True)
+
+# ========================================================
+# TAB 3: INTRADAY OPTION MOMENTUM & VOLATILITY EXTENSION SYSTEM
+# ========================================================
+with main_tab3:
+    st.header("🎯 Intraday Option Momentum & Volatility Extension System")
+    st.caption("Custom Volatility Extension Ladder, Move View Fail Triggers & Multi-Tier Range Targets (Reverse-Engineered Institutional Model)")
+
+    # Controls
+    col_c1, col_c2, col_c3 = st.columns([1.5, 1.5, 1.2])
+    with col_c1:
+        default_ticker = "^NSEI"  # Nifty 50 Index default
+        user_ticker = st.text_input("Enter Ticker / Symbol:", value="^NSEI", help="e.g., ^NSEI (Nifty), ^NSEBANK, RELIANCE.NS, GC=F (Gold)").strip().upper()
+    with col_c2:
+        selected_intraday_tf = st.selectbox(
+            "Select Timeframe:",
+            ("3m (Fast Momentum)", "5m (Standard Options)", "15m (Trend Swing)", "1m (Scalp)"),
+            index=1
+        )
+    with col_c3:
+        st.write("")
+        st.write("")
+        refresh_opt_sys = st.button("🔄 Recalculate Model", type="primary")
+
+    opt_tf_map = {
+        "1m (Scalp)": ("1m", "5d"),
+        "3m (Fast Momentum)": ("3m", "5d"),
+        "5m (Standard Options)": ("5m", "10d"),
+        "15m (Trend Swing)": ("15m", "30d")
+    }
+    opt_interval, opt_period = opt_tf_map[selected_intraday_tf]
+
+    @st.cache_data(ttl=60)
+    def fetch_volatility_extension_data(symbol, tf_int, tf_per):
+        try:
+            df = yf.download(symbol, period=tf_per, interval=tf_int, progress=False)
+            if df.empty or len(df) < 30:
+                return None
+            df = clean_yfinance_columns(df)
+            df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+
+            # Dynamic Volatility Risk Step: 14-period Wilder ATR
+            hl = df['high'] - df['low']
+            hc = (df['high'] - df['close'].shift(1)).abs()
+            lc = (df['low'] - df['close'].shift(1)).abs()
+            tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+            df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+
+            # Dynamic Trend Bands (Fast 9 EMA & Trailing Volatility Channel)
+            df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
+            df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
+
+            # Dynamic Trailing Volatility Trail (Fail Level Baseline)
+            df['trail_up'] = df['close'] - (1.5 * df['atr'])
+            df['trail_down'] = df['close'] + (1.5 * df['atr'])
+
+            return df.dropna(subset=['atr', 'ema_9', 'ema_21'])
+        except Exception:
+            return None
+
+    with st.spinner("Analyzing volatility structure and generating Range Ladders..."):
+        v_df = fetch_volatility_extension_data(user_ticker, opt_interval, opt_period)
+
+    if v_df is None or len(v_df) < 5:
+        st.error(f"Could not load data for '{user_ticker}'. Please verify the symbol.")
+    else:
+        last = v_df.iloc[-1]
+        c_price = float(last['close'])
+        c_atr = float(last['atr'])
+        c_ema9 = float(last['ema_9'])
+        c_ema21 = float(last['ema_21'])
+
+        # Establish Bias & Step Intervals
+        is_bullish = c_price >= c_ema9 and c_ema9 >= c_ema21
+        is_bearish = c_price < c_ema9 and c_ema9 < c_ema21
+
+        # Base Risk Step in Points (derived from ATR)
+        risk_step = round(c_atr * 1.5, 2)
+        half_step = round(risk_step / 2.0, 2)
+
+        # Compute Signal Box & Levels
+        if is_bullish:
+            bias_title = "CONTINUE VIEW UP"
+            box_bg = "#004D20"
+            box_border = "#00FF66"
+            box_text = "#FFFFFF"
+
+            fail_lvl = round(c_price - risk_step, 2)
+            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
+
+            # Exact Reverse-Engineered 5-Tier Upper Range Ladder
+            r1 = round(c_price + risk_step, 2)
+            r2 = round(r1 + half_step, 2)
+            r3 = round(r2 + half_step, 2)
+            r4 = round(r3 + half_step, 2)
+            r5 = round(r4 + half_step, 2)
+
+            ladder_labels = [
+                ("N Upper Range 1", r1),
+                ("N Upper Range 2", r2),
+                ("N Upper Range 3", r3),
+                ("N Extended Upper Range 4", r4),
+                ("N Extended Upper Range 5", r5)
+            ]
+        elif is_bearish:
+            bias_title = "CONTINUE VIEW DOWN"
+            box_bg = "#4D0000"
+            box_border = "#FF4D4D"
+            box_text = "#FFFFFF"
+
+            fail_lvl = round(c_price + risk_step, 2)
+            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
+
+            # Exact 5-Tier Lower Range Ladder
+            r1 = round(c_price - risk_step, 2)
+            r2 = round(r1 - half_step, 2)
+            r3 = round(r2 - half_step, 2)
+            r4 = round(r3 - half_step, 2)
+            r5 = round(r4 - half_step, 2)
+
+            ladder_labels = [
+                ("N Lower Range 1", r1),
+                ("N Lower Range 2", r2),
+                ("N Lower Range 3", r3),
+                ("N Extended Lower Range 4", r4),
+                ("N Extended Lower Range 5", r5)
+            ]
+        else:
+            bias_title = "NEUTRAL / CONSOLIDATION"
+            box_bg = "#222222"
+            box_border = "#888888"
+            box_text = "#DDDDDD"
+
+            fail_lvl = round(c_price - risk_step, 2)
+            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
+            r1 = round(c_price + risk_step, 2)
+            r2 = round(r1 + half_step, 2)
+            r3 =
