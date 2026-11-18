@@ -56,7 +56,7 @@ def add_indicators(df):
     df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
     return df.dropna(subset=['high_125', 'vol_sma_125', 'rsi', 'atr'])
 
-def plot_candles(df, title, hlines=None, emas=None, height=540):
+def plot_candles(df, title, hlines=None, emas=None, buy_markers=None, sell_markers=None, height=540):
     fig = go.Figure(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price"))
     if emas:
         for c, clr, w in emas:
@@ -65,6 +65,10 @@ def plot_candles(df, title, hlines=None, emas=None, height=540):
         for val, clr, lbl, dsh in hlines:
             if val is not None and not np.isnan(val):
                 fig.add_hline(y=val, line=dict(color=clr, width=1.5, dash=dsh), annotation_text=f"{lbl}: {val:,.2f}")
+    if buy_markers is not None and not buy_markers.empty:
+        fig.add_trace(go.Scatter(x=buy_markers.index, y=buy_markers.values, mode='markers', marker=dict(symbol='triangle-up', size=11, color='#00FF66'), name="BUY Trigger"))
+    if sell_markers is not None and not sell_markers.empty:
+        fig.add_trace(go.Scatter(x=sell_markers.index, y=sell_markers.values, mode='markers', marker=dict(symbol='triangle-down', size=11, color='#FF4D4D'), name="SELL Trigger"))
     fig.update_layout(title=title, height=height, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=40, b=20, l=20, r=20))
     return fig
 
@@ -99,12 +103,12 @@ with tab1:
             r = df_30m.iloc[-1]
             p, v, e9, a = round(float(r['close']), 2), round(float(r['vwap']), 2), round(float(r['ema_9']), 2), round(float(r['atr']), 2)
             is_b, is_s = (p > v and e9 > v), (p < v and e9 < v)
-            sig = "🟢 BUY" if is_b else ("🔴 SELL" if is_s else "⚪ NEUTRAL")
+            sig = "🟢 BUY (LONG)" if is_b else ("🔴 SELL (SHORT)" if is_s else "⚪ NEUTRAL")
             sl = f"${min(v - 1.0, p - 1.5 * a):,.2f}" if is_b else (f"${max(v + 1.0, p + 1.5 * a):,.2f}" if is_s else "-")
             tgt = f"${p + 3.0 * a:,.2f}" if is_b else (f"${p - 3.0 * a:,.2f}" if is_s else "-")
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Live Gold", f"${p:,.2f}"); m2.metric("Signal", sig); m3.metric("Stop Loss", sl); m4.metric("Target", tgt)
+            m1.metric("Live Gold", f"${p:,.2f}"); m2.metric("Signal", sig); m3.metric("Stop Loss", sl); m4.metric("Target (1:2)", tgt)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("VWAP", f"${v:,.2f}"); c2.metric("9 EMA", f"${e9:,.2f}"); c3.metric("PDH", f"${pdh_g:,.2f}"); c4.metric("PDL", f"${pdl_g:,.2f}")
 
@@ -142,7 +146,7 @@ with tab1:
             is_b, is_s = (p >= h125 and vr >= 1.0), (r['ema_21'] < r['ema_50'])
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Live Gold", f"${p:,.2f}")
-            m2.metric("Signal", "🟢 BUY" if is_b else ("🔴 SELL" if is_s else "⚪ NEUTRAL"))
+            m2.metric("Signal", "🟢 BUY (BREAKOUT)" if is_b else ("🔴 SELL (SHORT)" if is_s else "⚪ NEUTRAL"))
             m3.metric("Stop Loss", f"${p - 2*a:,.2f}" if is_b else (f"${p + 2*a:,.2f}" if is_s else "-"))
             m4.metric("Target", f"${p + 4*a:,.2f}" if is_b else (f"${p - 4*a:,.2f}" if is_s else "-"))
             st.plotly_chart(plot_candles(gdf.iloc[-120:], f"Gold {tf_choice}", [(h125, 'orange', '125 High', 'dash')], [('ema_21','blue',1.5), ('ema_50','red',1.5)]), use_container_width=True)
@@ -221,7 +225,7 @@ with tab2:
 # ========================================================
 with tab3:
     st.header("🎯 Intraday Option Momentum & Volatility Extension System")
-    st.caption("Multi-Timeframe Engine: Independent Signals, Fail Levels & 5-Tier Target Ladders on 15M, 1H, Daily & Monthly")
+    st.caption("Multi-Timeframe Engine: Explicit BUY / SELL Signals, Move View Fail Levels & 5-Tier Target Ladders on 15M, 1H, Daily & Monthly")
 
     PRESETS = {
         "NIFTY 50 (NSE)": "^NSEI", "BANK NIFTY (NSE)": "^NSEBANK", "FIN NIFTY (NSE)": "NIFTY_FIN_SERVICE.NS",
@@ -249,10 +253,8 @@ with tab3:
     with st.spinner(f"Loading 15M, 1H, Daily, and Monthly feeds for {u_sym}..."):
         d15, d1h, d1d, d1m = fetch_m_tf(u_sym)
 
-    # Universal Setup Calculator for ANY Timeframe
     def compute_timeframe_setup(df, tf_label):
-        if df is None or df.empty or len(df) < 15:
-            return None
+        if df is None or df.empty or len(df) < 15: return None
         df = df.copy()
         tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift(1)).abs(), (df['low'] - df['close'].shift(1)).abs()], axis=1).max(axis=1)
         df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
@@ -264,30 +266,40 @@ with tab3:
         r = df.iloc[-1]
         c_p = float(r['close'])
         c_a = float(r['atr']) if not np.isnan(r['atr']) else (c_p * 0.01)
-        c_e9 = float(r['ema_9'])
-        c_e21 = float(r['ema_21'])
+        c_e9, c_e21 = float(r['ema_9']), float(r['ema_21'])
 
         is_bull = (c_p >= c_e9) and (c_e9 >= c_e21)
         is_bear = (c_p < c_e9) and (c_e9 < c_e21)
         step = round(c_a * 1.5, 2)
         h_step = round(step / 2.0, 2)
 
+        bull_series = (df['close'] >= df['ema_9']) & (df['ema_9'] >= df['ema_21'])
+        bear_series = (df['close'] < df['ema_9']) & (df['ema_9'] < df['ema_21'])
+        buy_triggers = df[bull_series & (~bull_series.shift(1).fillna(False))]['low'] * 0.999
+        sell_triggers = df[bear_series & (~bear_series.shift(1).fillna(False))]['high'] * 1.001
+
         if is_bull:
-            title = f"CONTINUE VIEW UP ({tf_label})"
-            bg, border = "#113b22", "#00FF66"
+            sig_badge = "🟢 BUY (LONG / CALL)"
+            sig_action = "BUY"
+            title = f"CONTINUE VIEW UP — 🟢 BUY SETUP ACTIVE ({tf_label})"
+            bg, border = "#0d3b1e", "#00FF66"
             f_lvl = round(c_p - step, 2)
-            f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
+            f_str = f"{f_lvl:,.2f} (-{step:,.2f} pts)"
             r1 = round(c_p + step, 2)
             ladder = [(f"Target {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
         elif is_bear:
-            title = f"CONTINUE VIEW DOWN ({tf_label})"
+            sig_badge = "🔴 SELL (SHORT / PUT)"
+            sig_action = "SELL"
+            title = f"CONTINUE VIEW DOWN — 🔴 SELL SETUP ACTIVE ({tf_label})"
             bg, border = "#421616", "#FF4D4D"
             f_lvl = round(c_p + step, 2)
-            f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
+            f_str = f"{f_lvl:,.2f} (+{step:,.2f} pts)"
             r1 = round(c_p - step, 2)
             ladder = [(f"Target {i+1}", round(r1 - i * h_step, 2)) for i in range(5)]
         else:
-            title = f"NEUTRAL / CONSOLIDATION ({tf_label})"
+            sig_badge = "⚪ NEUTRAL / WAIT"
+            sig_action = "NEUTRAL"
+            title = f"CONSOLIDATION — ⚪ NO CLEAR SIGNAL ({tf_label})"
             bg, border = "#222222", "#888888"
             f_lvl = round(c_p - step, 2)
             f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
@@ -296,11 +308,11 @@ with tab3:
 
         return {
             'df': df, 'price': c_p, 'atr': c_a, 'is_bull': is_bull, 'is_bear': is_bear,
-            'title': title, 'bg': bg, 'border': border, 'fail_lvl': f_lvl, 'fail_str': f_str,
-            'ladder': ladder
+            'sig_badge': sig_badge, 'sig_action': sig_action, 'title': title, 'bg': bg, 'border': border,
+            'fail_lvl': f_lvl, 'fail_str': f_str, 'ladder': ladder,
+            'buy_triggers': buy_triggers, 'sell_triggers': sell_triggers
         }
 
-    # Render a Timeframe Module
     def render_tf_dashboard(setup, tf_name, extra_hlines=None, extra_emas=None, bars_to_show=90):
         if setup is None:
             st.warning(f"Insufficient data to build {tf_name} momentum model.")
@@ -312,11 +324,19 @@ with tab3:
         is_bull = setup['is_bull']
         ladder = setup['ladder']
 
-        # HUD Signal & Targets Banner
-        badges = "".join([f"<div style='background:rgba(255,255,255,0.08);padding:8px 12px;border-radius:6px;min-width:130px;margin:3px;display:inline-block;'><div style='color:#B0B0B0;font-size:12px;'>{n}</div><div style='color:#FFFFFF;font-weight:bold;font-size:16px;'>{l:,.2f}</div></div>" for n, l in ladder])
-        st.markdown(f"<div style='background-color:{setup['bg']};border:2px solid {setup['border']};border-radius:10px;padding:14px;margin-bottom:12px;'><h3 style='color:#FFF;margin:0;'>{setup['title']}</h3><div style='color:#E0E0E0;font-size:13px;margin:3px 0 8px 0;'>Current Close: <b>{c_p:,.2f}</b></div><div style='background:rgba(0,0,0,0.35);padding:6px 12px;border-radius:6px;margin-bottom:8px;'><span style='color:#FFAA00;font-weight:bold;'>Move View Fail LVL: </span><span style='color:#FFF;font-weight:bold;font-size:16px;'>{f_str}</span></div><div style='display:flex;flex-wrap:wrap;gap:4px;'>{badges}</div></div>", unsafe_allow_html=True)
+        # 1. Top KPI Row: High-Visibility Signal Metrics
+        k1, k2, k3, k4, k5 = st.columns([1.5, 1.2, 1.3, 1.2, 1.2])
+        k1.metric("Signal", setup['sig_badge'])
+        k2.metric("Current Price", f"{c_p:,.2f}")
+        k3.metric("Stop Loss (Fail Level)", f"{f_lvl:,.2f}")
+        k4.metric("Target 1 (1:1)", f"{ladder[0][1]:,.2f}")
+        k5.metric("Target 3 (1:2)", f"{ladder[2][1]:,.2f}")
 
-        # Plotly chart with Targets and Fail Level
+        # 2. Institutional Visual HUD Card with Target Badges
+        badges = "".join([f"<div style='background:rgba(255,255,255,0.08);padding:8px 12px;border-radius:6px;min-width:130px;margin:3px;display:inline-block;'><div style='color:#B0B0B0;font-size:12px;'>{n}</div><div style='color:#FFFFFF;font-weight:bold;font-size:16px;'>{l:,.2f}</div></div>" for n, l in ladder])
+        st.markdown(f"<div style='background-color:{setup['bg']};border:2px solid {setup['border']};border-radius:10px;padding:14px;margin-bottom:12px;'><h3 style='color:#FFF;margin:0;'>{setup['title']}</h3><div style='color:#E0E0E0;font-size:13px;margin:3px 0 8px 0;'>Current Close: <b>{c_p:,.2f}</b> | System Mode: <b>{setup['sig_action']}</b></div><div style='background:rgba(0,0,0,0.35);padding:6px 12px;border-radius:6px;margin-bottom:8px;'><span style='color:#FFAA00;font-weight:bold;'>Move View Fail LVL (Inactivation Trigger): </span><span style='color:#FFF;font-weight:bold;font-size:16px;'>{f_str}</span></div><div style='display:flex;flex-wrap:wrap;gap:4px;'>{badges}</div></div>", unsafe_allow_html=True)
+
+        # 3. Chart with Dynamic Targets, Fail Level, and Buy/Sell Markers
         h_lines = [(f_lvl, '#FFAA00', 'Fail LVL', 'dot')] + [(l, '#00FF66' if is_bull else '#FF4D4D', n, 'dash') for n, l in ladder]
         if extra_hlines:
             h_lines.extend(extra_hlines)
@@ -326,9 +346,8 @@ with tab3:
             emas.extend(extra_emas)
 
         plot_data = setup['df'].iloc[-bars_to_show:]
-        st.plotly_chart(plot_candles(plot_data, f"{tf_name} Setup & Targets ({u_sym})", h_lines, emas, height=560), use_container_width=True)
+        st.plotly_chart(plot_candles(plot_data, f"{tf_name} Setup & Targets ({u_sym})", h_lines, emas, setup['buy_triggers'], setup['sell_triggers'], height=560), use_container_width=True)
 
-    # 4 Multi-Timeframe Tabs
     ct1, ct2, ct3, ct4 = st.tabs([
         "⚡ 15-Minute (Ladder Execution)",
         "⏰ 1-Hour (Swing Trend & Targets)",
