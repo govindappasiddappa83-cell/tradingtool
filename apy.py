@@ -364,7 +364,7 @@ with main_tab3:
     with col_c1:
         user_ticker = st.text_input("Enter Ticker / Symbol:", value="^NSEI", help="e.g., ^NSEI, ^NSEBANK, RELIANCE.NS, GC=F").strip().upper()
     with col_c2:
-        selected_intraday_tf = st.selectbox("Select Timeframe:", ("3m (Fast Momentum)", "5m (Standard Options)", "15m (Trend Swing)", "1m (Scalp)"), index=1)
+        selected_intraday_tf = st.selectbox("Select Timeframe:", ("3m (Fast Momentum)", "5m (Standard Options)", "15m (Trend Swing)", "1m (Scalp)"), index=2)
     with col_c3:
         st.write("")
         st.write("")
@@ -478,27 +478,31 @@ with main_tab3:
                 ("Extended Range 5", r5)
             ]
 
-        # Display Signal Box
         time_str = now_ist.strftime("%d %b %I:%M %p (IST)")
-        box_html = f"""
-        <div style="background-color:{box_bg}; border:2px solid {box_border}; border-radius:10px; padding:18px; margin-bottom:20px;">
-            <h3 style="color:#FFFFFF; margin-top:0;">{bias_title}</h3>
-            <p style="color:#E0E0E0; margin-bottom:8px; font-size:14px;">📅 {time_str}</p>
-            <div style="background-color:rgba(0,0,0,0.3); padding:10px; border-radius:6px; margin-bottom:12px;">
-                <span style="font-weight:bold; color:#FFAA00;">Move View Fail LVL:</span> 
-                <span style="color:#FFFFFF; font-weight:bold; font-size:16px;">{fail_str}</span>
-            </div>
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
-        """
-        for name, lvl in ladder_labels:
-            box_html += f"""
-                <div style="background-color:rgba(255,255,255,0.06); padding:8px 12px; border-radius:6px;">
-                    <div style="color:#B0B0B0; font-size:12px;">{name}</div>
-                    <div style="color:#FFFFFF; font-weight:bold; font-size:16px;">{lvl:,.2f}</div>
-                </div>
-            """
-        box_html += "</div></div>"
-        st.markdown(box_html, unsafe_allow_html=True)
+        
+        # Flawless unindented single-block HTML layout
+        items_html = "".join([
+            f"<div style='background:rgba(255,255,255,0.08);padding:10px 14px;border-radius:6px;min-width:160px;margin:4px;display:inline-block;'>"
+            f"<div style='color:#B0B0B0;font-size:12px;'>{name}</div>"
+            f"<div style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{lvl:,.2f}</div>"
+            f"</div>"
+            for name, lvl in ladder_labels
+        ])
+
+        hud_card = (
+            f"<div style='background-color:{box_bg};border:2px solid {box_border};border-radius:10px;padding:20px;margin-bottom:20px;'>"
+            f"<h2 style='color:#FFFFFF;margin:0 0 4px 0;'>{bias_title}</h2>"
+            f"<div style='color:#E0E0E0;font-size:13px;margin-bottom:12px;'>📅 {time_str}</div>"
+            f"<div style='background:rgba(0,0,0,0.35);padding:10px 16px;border-radius:6px;margin-bottom:14px;'>"
+            f"<span style='color:#FFAA00;font-weight:bold;font-size:15px;'>Move View Fail LVL: </span>"
+            f"<span style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{fail_str}</span>"
+            f"</div>"
+            f"<div style='display:flex;flex-wrap:wrap;gap:8px;'>"
+            f"{items_html}"
+            f"</div>"
+            f"</div>"
+        )
+        st.markdown(hud_card, unsafe_allow_html=True)
 
         # Plotly Visual
         st.subheader(f"📊 Live Intraday Chart with Target Ladder ({user_ticker})")
