@@ -358,17 +358,39 @@ with main_tab2:
 # ========================================================
 with main_tab3:
     st.header("🎯 Intraday Option Momentum & Volatility Extension System")
-    st.caption("Custom Volatility Extension Ladder, Move View Fail Triggers & Multi-Tier Range Targets")
+    st.caption("Custom Volatility Extension Ladder, Move View Fail Triggers & Multi-Tier Range Targets (NSE / BSE / Indices / Commodities)")
 
-    col_c1, col_c2, col_c3 = st.columns([1.5, 1.5, 1.2])
-    with col_c1:
-        user_ticker = st.text_input("Enter Ticker / Symbol:", value="^NSEI", help="e.g., ^NSEI, ^NSEBANK, RELIANCE.NS, GC=F").strip().upper()
-    with col_c2:
-        selected_intraday_tf = st.selectbox("Select Timeframe:", ("3m (Fast Momentum)", "5m (Standard Options)", "15m (Trend Swing)", "1m (Scalp)"), index=2)
-    with col_c3:
+    # 1. Quick Ticker Selector
+    PRESET_TICKERS = {
+        "NIFTY 50 (NSE)": "^NSEI",
+        "BANK NIFTY (NSE)": "^NSEBANK",
+        "FIN NIFTY (NSE)": "NIFTY_FIN_SERVICE.NS",
+        "MIDCP NIFTY (NSE)": "NIFTY_MID_SELECT.NS",
+        "SENSEX (BSE)": "^BSESN",
+        "BANKEX (BSE)": "BSE-BANK.BO",
+        "COMEX Gold (USD)": "GC=F",
+        "Custom Symbol / Stock": "CUSTOM"
+    }
+
+    col_t1, col_t2, col_t3, col_t4 = st.columns([1.6, 1.4, 1.2, 1.0])
+    
+    with col_t1:
+        chosen_preset = st.selectbox("Select Asset / Index:", list(PRESET_TICKERS.keys()), index=0)
+
+    with col_t2:
+        if PRESET_TICKERS[chosen_preset] == "CUSTOM":
+            user_ticker = st.text_input("Enter Ticker:", value="RELIANCE.NS", help="NSE: e.g. TATASTEEL.NS | BSE: e.g. 500325.BO").strip().upper()
+        else:
+            user_ticker = PRESET_TICKERS[chosen_preset]
+            st.text_input("Active Ticker Symbol:", value=user_ticker, disabled=True)
+
+    with col_t3:
+        selected_intraday_tf = st.selectbox("Timeframe:", ("3m (Fast Momentum)", "5m (Standard Options)", "15m (Trend Swing)", "1m (Scalp)"), index=2)
+
+    with col_t4:
         st.write("")
         st.write("")
-        if st.button("🔄 Recalculate Model", type="primary"):
+        if st.button("🔄 Recalculate", type="primary"):
             st.cache_data.clear()
             st.rerun()
 
@@ -399,11 +421,11 @@ with main_tab3:
         except Exception:
             return None
 
-    with st.spinner("Calculating Volatility Extension Ladders..."):
+    with st.spinner(f"Calculating Volatility Extension Ladders for {user_ticker}..."):
         v_df = fetch_volatility_extension_data(user_ticker, opt_interval, opt_period)
 
     if v_df is None or len(v_df) < 5:
-        st.error(f"Could not load data for '{user_ticker}'. Please verify the symbol.")
+        st.error(f"Could not load data for '{user_ticker}'. Please verify the symbol or exchange hours.")
     else:
         last = v_df.iloc[-1]
         c_price = float(last['close'])
@@ -418,7 +440,7 @@ with main_tab3:
         half_step = round(risk_step / 2.0, 2)
 
         if is_bullish:
-            bias_title = "CONTINUE VIEW UP"
+            bias_title = f"CONTINUE VIEW UP — {chosen_preset.split('(')[0].strip()}"
             box_bg = "#113b22"
             box_border = "#00FF66"
             fail_lvl = round(c_price - risk_step, 2)
@@ -438,7 +460,7 @@ with main_tab3:
                 ("N Extended Upper Range 5", r5)
             ]
         elif is_bearish:
-            bias_title = "CONTINUE VIEW DOWN"
+            bias_title = f"CONTINUE VIEW DOWN — {chosen_preset.split('(')[0].strip()}"
             box_bg = "#421616"
             box_border = "#FF4D4D"
             fail_lvl = round(c_price + risk_step, 2)
@@ -458,7 +480,7 @@ with main_tab3:
                 ("N Extended Lower Range 5", r5)
             ]
         else:
-            bias_title = "NEUTRAL / CONSOLIDATION"
+            bias_title = f"NEUTRAL / CONSOLIDATION — {chosen_preset.split('(')[0].strip()}"
             box_bg = "#222222"
             box_border = "#888888"
             fail_lvl = round(c_price - risk_step, 2)
@@ -480,7 +502,7 @@ with main_tab3:
 
         time_str = now_ist.strftime("%d %b %I:%M %p (IST)")
         
-        # Flawless unindented single-block HTML layout
+        # Clean unindented HUD layout card
         items_html = "".join([
             f"<div style='background:rgba(255,255,255,0.08);padding:10px 14px;border-radius:6px;min-width:160px;margin:4px;display:inline-block;'>"
             f"<div style='color:#B0B0B0;font-size:12px;'>{name}</div>"
@@ -492,7 +514,7 @@ with main_tab3:
         hud_card = (
             f"<div style='background-color:{box_bg};border:2px solid {box_border};border-radius:10px;padding:20px;margin-bottom:20px;'>"
             f"<h2 style='color:#FFFFFF;margin:0 0 4px 0;'>{bias_title}</h2>"
-            f"<div style='color:#E0E0E0;font-size:13px;margin-bottom:12px;'>📅 {time_str}</div>"
+            f"<div style='color:#E0E0E0;font-size:13px;margin-bottom:12px;'>📅 {time_str} | Current Price: <b>{c_price:,.2f}</b></div>"
             f"<div style='background:rgba(0,0,0,0.35);padding:10px 16px;border-radius:6px;margin-bottom:14px;'>"
             f"<span style='color:#FFAA00;font-weight:bold;font-size:15px;'>Move View Fail LVL: </span>"
             f"<span style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{fail_str}</span>"
