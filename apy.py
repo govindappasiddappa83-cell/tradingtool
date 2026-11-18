@@ -354,13 +354,12 @@ with main_tab2:
         st.dataframe(pd.DataFrame(ex)[["Signal", "Stock", "Price", "RSI"]], use_container_width=True)
 
 # ========================================================
-# TAB 3: INTRADAY OPTION MOMENTUM & VOLATILITY EXTENSION SYSTEM
+# TAB 3: INTRADAY OPTION MOMENTUM & MULTI-TIMEFRAME ENGINE
 # ========================================================
 with main_tab3:
     st.header("🎯 Intraday Option Momentum & Volatility Extension System")
-    st.caption("Custom Volatility Extension Ladder, Move View Fail Triggers & Multi-Tier Range Targets (NSE / BSE / Indices / Commodities)")
+    st.caption("Multi-Timeframe Confluence Engine (15M Execution Ladder, Hourly Trend, Daily PDH/PDL, and Monthly PMH/PML)")
 
-    # 1. Quick Ticker Selector
     PRESET_TICKERS = {
         "NIFTY 50 (NSE)": "^NSEI",
         "BANK NIFTY (NSE)": "^NSEBANK",
@@ -372,66 +371,62 @@ with main_tab3:
         "Custom Symbol / Stock": "CUSTOM"
     }
 
-    col_t1, col_t2, col_t3, col_t4 = st.columns([1.6, 1.4, 1.2, 1.0])
-    
+    col_t1, col_t2, col_t3 = st.columns([1.8, 1.6, 1.0])
     with col_t1:
         chosen_preset = st.selectbox("Select Asset / Index:", list(PRESET_TICKERS.keys()), index=0)
 
     with col_t2:
         if PRESET_TICKERS[chosen_preset] == "CUSTOM":
-            user_ticker = st.text_input("Enter Ticker:", value="RELIANCE.NS", help="NSE: e.g. TATASTEEL.NS | BSE: e.g. 500325.BO").strip().upper()
+            user_ticker = st.text_input("Enter Custom Ticker:", value="RELIANCE.NS", help="e.g. TATASTEEL.NS, ^NSEI, GC=F").strip().upper()
         else:
             user_ticker = PRESET_TICKERS[chosen_preset]
             st.text_input("Active Ticker Symbol:", value=user_ticker, disabled=True)
 
     with col_t3:
-        selected_intraday_tf = st.selectbox("Timeframe:", ("3m (Fast Momentum)", "5m (Standard Options)", "15m (Trend Swing)", "1m (Scalp)"), index=2)
-
-    with col_t4:
         st.write("")
         st.write("")
-        if st.button("🔄 Recalculate", type="primary"):
+        if st.button("🔄 Recalculate Multi-TF", type="primary"):
             st.cache_data.clear()
             st.rerun()
 
-    opt_tf_map = {
-        "1m (Scalp)": ("1m", "5d"),
-        "3m (Fast Momentum)": ("3m", "5d"),
-        "5m (Standard Options)": ("5m", "10d"),
-        "15m (Trend Swing)": ("15m", "30d")
-    }
-    opt_interval, opt_period = opt_tf_map[selected_intraday_tf]
-
+    # --- Data Fetching for All 4 Timeframes ---
     @st.cache_data(ttl=60)
-    def fetch_volatility_extension_data(symbol, tf_int, tf_per):
-        try:
-            df = yf.download(symbol, period=tf_per, interval=tf_int, progress=False)
-            if df.empty or len(df) < 30: return None
-            df = clean_yfinance_columns(df)
-            df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+    def fetch_all_timeframes(symbol):
+        # 1. 15-Minute Data
+        df_15m = yf.download(symbol, period="30d", interval="15m", progress=False)
+        # 2. 1-Hour Data
+        df_1h = yf.download(symbol, period="60d", interval="1h", progress=False)
+        # 3. Daily Data
+        df_1d = yf.download(symbol, period="1y", interval="1d", progress=False)
+        # 4. Monthly Data
+        df_1mo = yf.download(symbol, period="5y", interval="1mo", progress=False)
 
-            hl = df['high'] - df['low']
-            hc = (df['high'] - df['close'].shift(1)).abs()
-            lc = (df['low'] - df['close'].shift(1)).abs()
-            tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-            df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-            df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
-            df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
-            return df.dropna(subset=['atr', 'ema_9', 'ema_21'])
-        except Exception:
-            return None
+        return (
+            clean_yfinance_columns(df_15m),
+            clean_yfinance_columns(df_1h),
+            clean_yfinance_columns(df_1d),
+            clean_yfinance_columns(df_1mo)
+        )
 
-    with st.spinner(f"Calculating Volatility Extension Ladders for {user_ticker}..."):
-        v_df = fetch_volatility_extension_data(user_ticker, opt_interval, opt_period)
+    with st.spinner(f"Fetching 15M, 1H, Daily, and Monthly data for {user_ticker}..."):
+        d15, d1h, d1d, d1mo = fetch_all_timeframes(user_ticker)
 
-    if v_df is None or len(v_df) < 5:
-        st.error(f"Could not load data for '{user_ticker}'. Please verify the symbol or exchange hours.")
+    if d15 is None or d15.empty or len(d15) < 15:
+        st.error(f"Could not load intraday data for '{user_ticker}'. Please verify the symbol.")
     else:
-        last = v_df.iloc[-1]
-        c_price = float(last['close'])
-        c_atr = float(last['atr'])
-        c_ema9 = float(last['ema_9'])
-        c_ema21 = float(last['ema_21'])
+        # --- 15M Calculations (Volatility Extension Ladder) ---
+        hl_15 = d15['high'] - d15['low']
+        hc_15 = (d15['high'] - d15['close'].shift(1)).abs()
+        lc_15 = (d15['low'] - d15['close'].shift(1)).abs()
+        d15['atr'] = pd.concat([hl_15, hc_15, lc_15], axis=1).max(axis=1).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        d15['ema_9'] = d15['close'].ewm(span=9, adjust=False).mean()
+        d15['ema_21'] = d15['close'].ewm(span=21, adjust=False).mean()
+
+        last_15 = d15.iloc[-1]
+        c_price = float(last_15['close'])
+        c_atr = float(last_15['atr'])
+        c_ema9 = float(last_15['ema_9'])
+        c_ema21 = float(last_15['ema_21'])
 
         is_bullish = (c_price >= c_ema9) and (c_ema9 >= c_ema21)
         is_bearish = (c_price < c_ema9) and (c_ema9 < c_ema21)
@@ -445,19 +440,14 @@ with main_tab3:
             box_border = "#00FF66"
             fail_lvl = round(c_price - risk_step, 2)
             fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
-
             r1 = round(c_price + risk_step, 2)
             r2 = round(r1 + half_step, 2)
             r3 = round(r2 + half_step, 2)
             r4 = round(r3 + half_step, 2)
             r5 = round(r4 + half_step, 2)
-
             ladder_labels = [
-                ("N Upper Range 1", r1),
-                ("N Upper Range 2", r2),
-                ("N Upper Range 3", r3),
-                ("N Extended Upper Range 4", r4),
-                ("N Extended Upper Range 5", r5)
+                ("N Upper Range 1", r1), ("N Upper Range 2", r2), ("N Upper Range 3", r3),
+                ("N Extended Upper Range 4", r4), ("N Extended Upper Range 5", r5)
             ]
         elif is_bearish:
             bias_title = f"CONTINUE VIEW DOWN — {chosen_preset.split('(')[0].strip()}"
@@ -465,80 +455,14 @@ with main_tab3:
             box_border = "#FF4D4D"
             fail_lvl = round(c_price + risk_step, 2)
             fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
-
             r1 = round(c_price - risk_step, 2)
             r2 = round(r1 - half_step, 2)
             r3 = round(r2 - half_step, 2)
             r4 = round(r3 - half_step, 2)
             r5 = round(r4 - half_step, 2)
-
             ladder_labels = [
-                ("N Lower Range 1", r1),
-                ("N Lower Range 2", r2),
-                ("N Lower Range 3", r3),
-                ("N Extended Lower Range 4", r4),
-                ("N Extended Lower Range 5", r5)
+                ("N Lower Range 1", r1), ("N Lower Range 2", r2), ("N Lower Range 3", r3),
+                ("N Extended Lower Range 4", r4), ("N Extended Lower Range 5", r5)
             ]
         else:
-            bias_title = f"NEUTRAL / CONSOLIDATION — {chosen_preset.split('(')[0].strip()}"
-            box_bg = "#222222"
-            box_border = "#888888"
-            fail_lvl = round(c_price - risk_step, 2)
-            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
-
-            r1 = round(c_price + risk_step, 2)
-            r2 = round(r1 + half_step, 2)
-            r3 = round(r2 + half_step, 2)
-            r4 = round(r3 + half_step, 2)
-            r5 = round(r4 + half_step, 2)
-
-            ladder_labels = [
-                ("Range Level 1", r1),
-                ("Range Level 2", r2),
-                ("Range Level 3", r3),
-                ("Extended Range 4", r4),
-                ("Extended Range 5", r5)
-            ]
-
-        time_str = now_ist.strftime("%d %b %I:%M %p (IST)")
-        
-        # Clean unindented HUD layout card
-        items_html = "".join([
-            f"<div style='background:rgba(255,255,255,0.08);padding:10px 14px;border-radius:6px;min-width:160px;margin:4px;display:inline-block;'>"
-            f"<div style='color:#B0B0B0;font-size:12px;'>{name}</div>"
-            f"<div style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{lvl:,.2f}</div>"
-            f"</div>"
-            for name, lvl in ladder_labels
-        ])
-
-        hud_card = (
-            f"<div style='background-color:{box_bg};border:2px solid {box_border};border-radius:10px;padding:20px;margin-bottom:20px;'>"
-            f"<h2 style='color:#FFFFFF;margin:0 0 4px 0;'>{bias_title}</h2>"
-            f"<div style='color:#E0E0E0;font-size:13px;margin-bottom:12px;'>📅 {time_str} | Current Price: <b>{c_price:,.2f}</b></div>"
-            f"<div style='background:rgba(0,0,0,0.35);padding:10px 16px;border-radius:6px;margin-bottom:14px;'>"
-            f"<span style='color:#FFAA00;font-weight:bold;font-size:15px;'>Move View Fail LVL: </span>"
-            f"<span style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{fail_str}</span>"
-            f"</div>"
-            f"<div style='display:flex;flex-wrap:wrap;gap:8px;'>"
-            f"{items_html}"
-            f"</div>"
-            f"</div>"
-        )
-        st.markdown(hud_card, unsafe_allow_html=True)
-
-        # Plotly Visual
-        st.subheader(f"📊 Live Intraday Chart with Target Ladder ({user_ticker})")
-        p_df = v_df.iloc[-90:]
-
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(x=p_df.index, open=p_df['open'], high=p_df['high'], low=p_df['low'], close=p_df['close'], name=user_ticker))
-        fig.add_trace(go.Scatter(x=p_df.index, y=p_df['ema_9'], line=dict(color='cyan', width=1.5), name="9 EMA"))
-        fig.add_trace(go.Scatter(x=p_df.index, y=p_df['ema_21'], line=dict(color='magenta', width=1.5), name="21 EMA"))
-
-        fig.add_hline(y=fail_lvl, line=dict(color='#FFAA00', width=2, dash='dot'), annotation_text=f"Fail LVL: {fail_lvl:,.2f}")
-        colors = ['#66FF66', '#33CC33', '#009900', '#006600', '#004400']
-        for i, (name, lvl) in enumerate(ladder_labels):
-            fig.add_hline(y=lvl, line=dict(color=colors[i % len(colors)], width=1, dash='dash'), annotation_text=f"{name}: {lvl:,.2f}")
-
-        fig.update_layout(height=650, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=30, l=30, r=30))
-        st.plotly_chart(fig, use_container_width=True)
+            bias_title = f"NEUTRAL / CONSOLIDATION —
