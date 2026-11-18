@@ -9,547 +9,337 @@ from datetime import datetime
 import pytz
 import time
 
-st.set_page_config(page_title="Professional Trading Dashboard", layout="wide", page_icon="⚡")
-
+st.set_page_config(page_title="Professional Trading Terminal", layout="wide", page_icon="⚡")
 IST = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(IST)
 
-# Top Navigation Tabs
-main_tab1, main_tab2, main_tab3 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "🥇 Gold (XAU/USD) Dashboard", 
     "🇮🇳 NSE Stocks Scanner",
     "🎯 Intraday Option Momentum & Volatility Extension System"
 ])
 
 # ========================================================
-# HELPER: DATA CLEANER & INDICATOR ENGINE
+# UTILITIES & REUSABLE INDICATORS
 # ========================================================
-def clean_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
+def clean_cols(df):
+    if df is None or df.empty: return df
     if isinstance(df.columns, pd.MultiIndex):
-        lvl0 = [str(c).lower() for c in df.columns.get_level_values(0)]
-        if 'close' in lvl0 or 'open' in lvl0:
-            df.columns = df.columns.get_level_values(0)
-        else:
-            df.columns = df.columns.get_level_values(1)
+        l0 = [str(c).lower() for c in df.columns.get_level_values(0)]
+        df.columns = df.columns.get_level_values(0 if ('close' in l0 or 'open' in l0) else 1)
     df.columns = [str(c).lower() for c in df.columns]
     return df
 
-def compute_indicators(df):
-    if df is None or df.empty or len(df) < 130:
-        return None
-
-    df = clean_yfinance_columns(df)
-    required = ['open', 'high', 'low', 'close', 'volume']
-    if not all(col in df.columns for col in required):
-        return None
-
-    df = df[required].copy()
-
-    # 1. 125-Period Breakout Bounds (Shifted to eliminate lookahead bias)
+def add_indicators(df):
+    if df is None or df.empty or len(df) < 130: return None
+    df = clean_cols(df)
+    req = ['open', 'high', 'low', 'close', 'volume']
+    if not all(c in df.columns for c in req): return None
+    df = df[req].copy()
     df['high_125'] = df['high'].shift(1).rolling(125).max()
     df['low_125'] = df['low'].shift(1).rolling(125).min()
     df['vol_sma_125'] = df['volume'].rolling(125).mean()
 
-    # 2. RSI 14 (Wilder's RMA smoothing)
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    rs = avg_gain / (avg_loss + 1e-9)
-    df['rsi'] = 100.0 - (100.0 / (1.0 + rs))
+    # Wilder RMA RSI
+    d = df['close'].diff()
+    ag = d.where(d > 0, 0.0).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+    al = (-d.where(d < 0, 0.0)).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+    df['rsi'] = 100.0 - (100.0 / (1.0 + (ag / (al + 1e-9))))
 
-    # 3. ATR 14 & ATR SMA 50
-    hl = df['high'] - df['low']
-    hc = (df['high'] - df['close'].shift(1)).abs()
-    lc = (df['low'] - df['close'].shift(1)).abs()
-    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+    # ATR & MAs
+    tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift(1)).abs(), (df['low'] - df['close'].shift(1)).abs()], axis=1).max(axis=1)
     df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
     df['atr_sma_50'] = df['atr'].rolling(50).mean()
-
-    # 4. Moving Averages
     df['sma_50'] = df['close'].rolling(50).mean()
     df['sma_200'] = df['close'].rolling(min(200, len(df)-1)).mean()
     df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
     df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-
     return df.dropna(subset=['high_125', 'vol_sma_125', 'rsi', 'atr'])
 
-# ========================================================
-# TAB 1: GOLD (XAU/USD) DASHBOARD
-# ========================================================
-with main_tab1:
-    gold_strategy = st.radio(
-        "🎯 **Choose Gold Strategy:**",
-        ("Strategy 2: 30M Session VWAP + 9 EMA + PDH/PDL", "Strategy 1: 125-Bar Breakout + Volume (Multi-Timeframe)"),
-        horizontal=True
-    )
+def plot_candles(df, title, hlines=None, emas=None, height=520):
+    fig = go.Figure(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price"))
+    if emas:
+        for c, clr, w in emas:
+            if c in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df[c], line=dict(color=clr, width=w), name=c.upper()))
+    if hlines:
+        for val, clr, lbl, dsh in hlines:
+            if val is not None and not np.isnan(val):
+                fig.add_hline(y=val, line=dict(color=clr, width=1.5, dash=dsh), annotation_text=f"{lbl}: {val:,.2f}")
+    fig.update_layout(title=title, height=height, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=40, b=20, l=20, r=20))
+    return fig
 
-    if "Strategy 2" in gold_strategy:
-        st.subheader("⚡ Gold Strategy 2: 30-Minute Session VWAP + 9 EMA + PDH / PDL")
-        if st.button("🔄 Refresh 30M Gold Strategy", type="primary"):
-            st.cache_data.clear()
-            st.rerun()
+# ========================================================
+# TAB 1: GOLD TERMINAL
+# ========================================================
+with tab1:
+    g_mode = st.radio("🎯 Choose Gold Strategy:", ("Strategy 2: 30M VWAP + 9 EMA + PDH/PDL", "Strategy 1: 125-Bar Breakout"), horizontal=True)
+
+    if "Strategy 2" in g_mode:
+        st.subheader("⚡ Gold Strategy 2: 30M Session VWAP + 9 EMA + PDH/PDL")
+        if st.button("🔄 Refresh 30M Gold", type="primary"):
+            st.cache_data.clear(); st.rerun()
 
         @st.cache_data(ttl=120)
-        def fetch_gold_30m():
-            df = yf.download("GC=F", period="30d", interval="30m", progress=False)
-            if df.empty or len(df) < 50:
-                return None, None, None
-
-            df = clean_yfinance_columns(df)
-            df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+        def get_gold_30m():
+            df = clean_cols(yf.download("GC=F", period="30d", interval="30m", progress=False))
+            if df is None or len(df) < 50: return None, None, None
             df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
-
             df['date'] = df.index.date
             tp = (df['high'] + df['low'] + df['close']) / 3.0
-            df['tp_vol'] = tp * df['volume']
-            df['cum_tp_vol'] = df.groupby('date')['tp_vol'].cumsum()
-            df['cum_vol'] = df.groupby('date')['volume'].cumsum()
-            df['vwap'] = df['cum_tp_vol'] / (df['cum_vol'] + 1e-9)
-
-            hl = df['high'] - df['low']
-            hc = (df['high'] - df['close'].shift(1)).abs()
-            lc = (df['low'] - df['close'].shift(1)).abs()
-            tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+            df['vwap'] = (tp * df['volume']).groupby(df['date']).cumsum() / (df['volume'].groupby(df['date']).cumsum() + 1e-9)
+            tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift(1)).abs(), (df['low'] - df['close'].shift(1)).abs()], axis=1).max(axis=1)
             df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-
-            counts = df.groupby('date').size()
-            valid_days = counts[counts >= 10].index
-            if len(valid_days) >= 2:
-                prev_df = df[df['date'] == valid_days[-2]]
-                pdh, pdl = float(prev_df['high'].max()), float(prev_df['low'].min())
-            else:
-                pdh, pdl = float(df['high'].max()), float(df['low'].min())
-
+            vdays = df.groupby('date').size()[lambda x: x >= 10].index
+            pdh = float(df[df['date'] == vdays[-2]]['high'].max()) if len(vdays) >= 2 else float(df['high'].max())
+            pdl = float(df[df['date'] == vdays[-2]]['low'].min()) if len(vdays) >= 2 else float(df['low'].min())
             return df.dropna(subset=['ema_9', 'vwap', 'atr']), pdh, pdl
 
-        df_30m, pdh_val, pdl_val = fetch_gold_30m()
-
+        df_30m, pdh_g, pdl_g = get_gold_30m()
         if df_30m is not None and len(df_30m) >= 2:
-            latest = df_30m.iloc[-1]
-            p = round(float(latest['close']), 2)
-            v = round(float(latest['vwap']), 2)
-            e9 = round(float(latest['ema_9']), 2)
-            a_val = round(float(latest['atr']), 2)
+            r = df_30m.iloc[-1]
+            p, v, e9, a = round(float(r['close']), 2), round(float(r['vwap']), 2), round(float(r['ema_9']), 2), round(float(r['atr']), 2)
+            is_b, is_s = (p > v and e9 > v), (p < v and e9 < v)
+            sig = "🟢 BUY" if is_b else ("🔴 SELL" if is_s else "⚪ NEUTRAL")
+            sl = f"${min(v - 1.0, p - 1.5 * a):,.2f}" if is_b else (f"${max(v + 1.0, p + 1.5 * a):,.2f}" if is_s else "-")
+            tgt = f"${p + 3.0 * a:,.2f}" if is_b else (f"${p - 3.0 * a:,.2f}" if is_s else "-")
 
-            is_bull = (p > v) and (e9 > v)
-            is_bear = (p < v) and (e9 < v)
-
-            if is_bull:
-                sig = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold;'>🟢 STRONG BUY</span>"
-                sl = f"${min(v - 1.0, round(p - 1.5 * a_val, 2)):,.2f}"
-                tgt = f"${round(p + 3.0 * a_val, 2):,.2f}"
-            elif is_bear:
-                sig = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold;'>🔴 STRONG SELL</span>"
-                sl = f"${max(v + 1.0, round(p + 1.5 * a_val, 2)):,.2f}"
-                tgt = f"${round(p - 3.0 * a_val, 2):,.2f}"
-            else:
-                sig = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold;'>⚪ NEUTRAL</span>"
-                sl, tgt = "-", "-"
-
-            m1, m2, m3, m4 = st.columns([1.2, 2.2, 1.3, 1.3])
-            m1.metric("Live Gold Price (30M)", f"${p:,.2f}")
-            m2.markdown(f"**Signal**<br>{sig}", unsafe_allow_html=True)
-            m3.metric("Stop-Loss", sl)
-            m4.metric("Target (1:2 RR)", tgt)
-
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Live Gold", f"${p:,.2f}"); m2.metric("Signal", sig); m3.metric("Stop Loss", sl); m4.metric("Target", tgt)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Session VWAP", f"${v:,.2f}")
-            c2.metric("9 EMA", f"${e9:,.2f}")
-            c3.metric("PDH", f"${pdh_val:,.2f}")
-            c4.metric("PDL", f"${pdl_val:,.2f}")
+            c1.metric("VWAP", f"${v:,.2f}"); c2.metric("9 EMA", f"${e9:,.2f}"); c3.metric("PDH", f"${pdh_g:,.2f}"); c4.metric("PDL", f"${pdl_g:,.2f}")
 
-            plot_df = df_30m.iloc[-150:]
+            plot_df = df_30m.iloc[-120:]
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
-            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['open'], high=plot_df['high'], low=plot_df['low'], close=plot_df['close'], name="Gold"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['vwap'], line=dict(color='orange', width=2), name="VWAP"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['ema_9'], line=dict(color='cyan', width=1.5), name="9 EMA"), row=1, col=1)
-            fig.add_hline(y=pdh_val, line=dict(color='#00FF66', width=1.5, dash='dash'), annotation_text="PDH", row=1, col=1)
-            fig.add_hline(y=pdl_val, line=dict(color='#FF4D4D', width=1.5, dash='dash'), annotation_text="PDL", row=1, col=1)
-            fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['volume'], name="Volume"), row=2, col=1)
-            fig.update_layout(height=650, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20))
+            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['open'], high=plot_df['high'], low=plot_df['low'], close=plot_df['close'], name="Gold"), 1, 1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['vwap'], line=dict(color='orange', width=2), name="VWAP"), 1, 1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['ema_9'], line=dict(color='cyan', width=1.5), name="9 EMA"), 1, 1)
+            fig.add_hline(y=pdh_g, line=dict(color='#00FF66', width=1.5, dash='dash'), annotation_text="PDH", row=1, col=1)
+            fig.add_hline(y=pdl_g, line=dict(color='#FF4D4D', width=1.5, dash='dash'), annotation_text="PDL", row=1, col=1)
+            fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['volume'], name="Volume"), 2, 1)
+            fig.update_layout(height=580, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig, use_container_width=True)
 
     else:
-        st.subheader("🏆 Gold Strategy 1: 125-Bar Breakout + Volume")
-        gold_tf = st.radio("⏱️ Timeframe:", ("Daily (1D)", "4-Hour (4H)", "1-Hour (1H)", "15-Minute (15M)"), horizontal=True)
-        tf_map = {
-            "Daily (1D)": ("1d", "2y", "125-Day"),
-            "4-Hour (4H)": ("4h", "120d", "125-Bar (4H)"),
-            "1-Hour (1H)": ("1h", "60d", "125-Hour"),
-            "15-Minute (15M)": ("15m", "30d", "125-Bar (15M)")
-        }
-        g_int, g_per, g_lbl = tf_map[gold_tf]
+        st.subheader("🏆 Gold Strategy 1: 125-Bar Breakout")
+        tf_choice = st.radio("Timeframe:", ("Daily (1D)", "4-Hour (4H)", "1-Hour (1H)", "15-Minute (15M)"), horizontal=True)
+        tf_dict = {"Daily (1D)": ("1d", "2y"), "4-Hour (4H)": ("4h", "120d"), "1-Hour (1H)": ("1h", "60d"), "15-Minute (15M)": ("15m", "30d")}
+        iv, pr = tf_dict[tf_choice]
 
         @st.cache_data(ttl=120)
-        def fetch_gold(interval_val, period_val):
+        def get_gold_tf(interval_val, period_val):
             if interval_val == "4h":
-                raw = yf.download("GC=F", period=period_val, interval="1h", progress=False)
-                if raw.empty: return None
-                raw = clean_yfinance_columns(raw)
-                df = raw.resample('4h').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna()
+                raw = clean_cols(yf.download("GC=F", period=period_val, interval="1h", progress=False))
+                df = raw.resample('4h').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna() if raw is not None else None
             else:
                 df = yf.download("GC=F", period=period_val, interval=interval_val, progress=False)
-            return compute_indicators(df)
+            return add_indicators(df)
 
-        gold_df = fetch_gold(g_int, g_per)
-        if gold_df is not None and len(gold_df) >= 2:
-            row = gold_df.iloc[-1]
-            p = round(float(row['close']), 2)
-            h125 = round(float(row['high_125']), 2)
-            a = round(float(row['atr']), 2)
-            vr = round(float(row['volume']) / (float(row['vol_sma_125']) + 1e-9), 2)
-
-            is_buy = (p >= h125) and (vr >= 1.0)
-            is_sell = row['ema_21'] < row['ema_50']
-
-            if is_buy:
-                sig = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold;'>🟢 STRONG BUY</span>"
-                sl = f"${round(p - 2 * a, 2):,.2f}"
-                tgt = f"${round(p + 4 * a, 2):,.2f}"
-            elif is_sell:
-                sig = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold;'>🔴 SELL / SHORT</span>"
-                sl = f"${round(p + 2 * a, 2):,.2f}"
-                tgt = f"${round(p - 4 * a, 2):,.2f}"
-            else:
-                sig = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold;'>⚪ NEUTRAL</span>"
-                sl, tgt = "-", "-"
-
-            m1, m2, m3, m4 = st.columns([1.2, 2.2, 1.3, 1.3])
-            m1.metric("Live Gold Price", f"${p:,.2f}")
-            m2.markdown(f"**Signal**<br>{sig}", unsafe_allow_html=True)
-            m3.metric("Stop-Loss (2 ATR)", sl)
-            m4.metric("Target (4 ATR)", tgt)
-
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=gold_df.index, open=gold_df['open'], high=gold_df['high'], low=gold_df['low'], close=gold_df['close'], name="Price"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['high_125'], line=dict(color='orange', dash='dash'), name=f"{g_lbl} High"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_21'], line=dict(color='blue', width=1.5), name="21 EMA"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_50'], line=dict(color='red', width=1.5), name="50 EMA"), row=1, col=1)
-            fig.add_trace(go.Bar(x=gold_df.index, y=gold_df['volume'], name="Volume"), row=2, col=1)
-            fig.update_layout(height=650, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20))
-            st.plotly_chart(fig, use_container_width=True)
+        gdf = get_gold_tf(iv, pr)
+        if gdf is not None and len(gdf) >= 2:
+            r = gdf.iloc[-1]
+            p, h125, a = round(float(r['close']), 2), round(float(r['high_125']), 2), round(float(r['atr']), 2)
+            vr = round(float(r['volume']) / (float(r['vol_sma_125']) + 1e-9), 2)
+            is_b, is_s = (p >= h125 and vr >= 1.0), (r['ema_21'] < r['ema_50'])
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Live Gold", f"${p:,.2f}")
+            m2.metric("Signal", "🟢 BUY" if is_b else ("🔴 SELL" if is_s else "⚪ NEUTRAL"))
+            m3.metric("Stop Loss", f"${p - 2*a:,.2f}" if is_b else (f"${p + 2*a:,.2f}" if is_s else "-"))
+            m4.metric("Target", f"${p + 4*a:,.2f}" if is_b else (f"${p - 4*a:,.2f}" if is_s else "-"))
+            st.plotly_chart(plot_candles(gdf.iloc[-120:], f"Gold {tf_choice}", [(h125, 'orange', '125 High', 'dash')], [('ema_21','blue',1.5), ('ema_50','red',1.5)]), use_container_width=True)
 
 # ========================================================
 # TAB 2: NSE STOCKS SCANNER
 # ========================================================
-with main_tab2:
+with tab2:
     st.title("🇮🇳 NSE Institutional Volume & Breakout Tracker")
-
-    selected_tf = st.radio("⏱️ Select Timeframe:", ("📅 Daily (1D) — Positional Swing", "⏰ 1-Hour (1H) — Short-Term Swing"), horizontal=True)
-    is_daily = "Daily" in selected_tf
-    interval = "1d" if is_daily else "1h"
-    period = "2y" if is_daily else "60d"
-    bar_label = "125-Day" if is_daily else "125-Hour"
+    sel_tf = st.radio("⏱️ Timeframe:", ("Daily (1D)", "1-Hour (1H)"), horizontal=True)
+    is_d = "Daily" in sel_tf
+    s_iv, s_pr = ("1d", "2y") if is_d else ("1h", "60d")
 
     NIFTY_UNIVERSE = [
-        "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
-        "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BPCL",
-        "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DRREDDY",
-        "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
-        "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC",
-        "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK", "LT",
-        "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC",
-        "POWERGRID", "RELIANCE", "SBILIFE", "SHRIRAMFIN", "SBIN",
-        "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL",
-        "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO",
-        "ABB", "AMBUJACEM", "BANKBARODA", "BOSCHLTD", "CANBK",
-        "CHOLAFIN", "DABUR", "DLF", "GAIL", "GODREJCP",
-        "HAVELLS", "HAL", "ICICIGI", "IOC", "IRCTC", "IRFC",
-        "JINDALSTEL", "JIOFIN", "MOTHERSON", "PIDILITIND", "PNB",
-        "PFC", "RECLTD", "SIEMENS", "TORNTPHARM", "TVSMOTOR",
-        "VEDL", "ZOMATO", "ZYDUSLIFE", "POLYCAB"
+        "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BPCL",
+        "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
+        "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC", "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK", "LT",
+        "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SHRIRAMFIN", "SBIN",
+        "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO",
+        "ABB", "AMBUJACEM", "BANKBARODA", "BOSCHLTD", "CANBK", "CHOLAFIN", "DABUR", "DLF", "GAIL", "GODREJCP",
+        "HAVELLS", "HAL", "ICICIGI", "IOC", "IRCTC", "IRFC", "JINDALSTEL", "JIOFIN", "MOTHERSON", "PIDILITIND",
+        "PNB", "PFC", "RECLTD", "SIEMENS", "TORNTPHARM", "TVSMOTOR", "VEDL", "ZOMATO", "ZYDUSLIFE", "POLYCAB"
     ]
 
-    def analyze_nse_stock(symbol, tf_int, tf_per):
-        ticker = f"{symbol}.NS"
-        df = None
-        for _ in range(2):
-            try:
-                df = yf.download(ticker, period=tf_per, interval=tf_int, progress=False)
-                if df is not None and not df.empty and len(df) >= 130:
-                    break
-            except Exception:
-                time.sleep(0.2)
-                continue
-
-        df = compute_indicators(df)
-        if df is None or len(df) < 2: return None
-
+    def scan_one(sym):
         try:
-            row = df.iloc[-1]
-            prev = df.iloc[-2]
-            p = round(float(row['close']), 2)
-            h125 = round(float(row['high_125']), 2)
-            a = round(float(row['atr']), 2)
-            vr = round(float(row['volume']) / (float(row['vol_sma_125']) + 1e-9), 2)
-            dist = round(((p - h125) / h125) * 100, 2)
-
-            is_bo = (p >= h125) and (vr >= 1.0)
-            is_sell = (row['ema_21'] < row['ema_50']) and (prev['ema_21'] >= prev['ema_50'])
-            is_near = (-3.0 <= dist < 0.0) and (vr >= 0.8)
-
-            score = sum([int(row['rsi'] < 70), int(row['atr'] > row['atr_sma_50']), int(row['close'] > row['sma_50']), int(row['ema_21'] > row['ema_50'])])
-
+            df = yf.download(f"{sym}.NS", period=s_pr, interval=s_iv, progress=False)
+            df = add_indicators(df)
+            if df is None or len(df) < 2: return None
+            r, prev = df.iloc[-1], df.iloc[-2]
+            p, h, a = round(float(r['close']), 2), round(float(r['high_125']), 2), round(float(r['atr']), 2)
+            vr = round(float(r['volume']) / (float(r['vol_sma_125']) + 1e-9), 2)
+            dist = round(((p - h) / h) * 100, 2)
+            is_bo = (p >= h) and (vr >= 1.0)
+            is_sell = (r['ema_21'] < r['ema_50']) and (prev['ema_21'] >= prev['ema_50'])
+            is_nr = (-3.0 <= dist < 0.0) and (vr >= 0.8)
+            sc = sum([int(r['rsi'] < 70), int(r['atr'] > r['atr_sma_50']), int(r['close'] > r['sma_50']), int(r['ema_21'] > r['ema_50'])])
             return {
-                "Signal": "🟢 BUY" if is_bo else ("🔴 SELL" if is_sell else ("🟡 NEAR BUY" if is_near else "⚪ NEUTRAL")),
-                "Stock": symbol,
-                "Price": f"₹{p:,.2f}",
-                "Breakout High": f"₹{h125:,.2f}",
-                "Distance to High": f"{dist:+0.2f}%",
-                "Volume Surge": f"{vr}x Avg",
-                "RSI": round(float(row['rsi']), 1),
-                "Score": f"{score + (1 if is_bo else 0)}/6",
-                "Stop Loss": f"₹{round(p - 2 * a, 2):,.2f}",
-                "Target": f"₹{round(p + 4 * a, 2):,.2f}",
-                "Is_Breakout": is_bo,
-                "Is_High_Volume": vr >= 1.2,
-                "Is_Near_Breakout": is_near,
-                "Is_Sell": is_sell,
-                "Raw_Volume": vr,
-                "Raw_Distance": dist
+                "Signal": "🟢 BUY" if is_bo else ("🔴 SELL" if is_sell else ("🟡 NEAR" if is_nr else "⚪ HOLD")),
+                "Stock": sym, "Price": f"₹{p:,.2f}", "Breakout High": f"₹{h:,.2f}", "Distance": f"{dist:+0.2f}%",
+                "Vol Surge": f"{vr}x", "RSI": round(float(r['rsi']), 1), "Score": f"{sc + (1 if is_bo else 0)}/6",
+                "Stop Loss": f"₹{round(p - 2*a, 2):,.2f}", "Target": f"₹{round(p + 4*a, 2):,.2f}",
+                "is_bo": is_bo, "is_vol": vr >= 1.2, "is_nr": is_nr, "is_sell": is_sell, "raw_vol": vr, "raw_dist": dist
             }
-        except Exception:
-            return None
+        except Exception: return None
 
     @st.cache_data(ttl=600)
-    def run_clean_scan(tf_int, tf_per):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(analyze_nse_stock, sym, tf_int, tf_per): sym for sym in NIFTY_UNIVERSE}
-            results = [f.result() for f in concurrent.futures.as_completed(futures)]
-        return [r for r in results if r is not None]
+    def run_all_scans():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            return [r for r in ex.map(scan_one, NIFTY_UNIVERSE) if r is not None]
 
     if st.button("🔄 Force Re-Scan NSE", type="primary"):
-        st.cache_data.clear()
-        st.rerun()
+        st.cache_data.clear(); st.rerun()
 
-    with st.spinner("Screening NSE stocks..."):
-        all_results = run_clean_scan(interval, period)
+    with st.spinner("Screening 80 NSE assets..."):
+        res = run_all_scans()
 
-    # 1. Breakouts
-    st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Volume)")
-    bo = [r for r in all_results if r.get("Is_Breakout")]
-    if bo:
-        st.dataframe(pd.DataFrame(bo)[["Signal", "Stock", "Price", "Breakout High", "Volume Surge", "Score", "Stop Loss", "Target", "RSI"]], use_container_width=True)
-    else:
-        st.info("No stocks currently meeting active breakout rules.")
+    st.subheader("🎯 1. Active Breakouts")
+    bo_list = [r for r in res if r['is_bo']]
+    st.dataframe(pd.DataFrame(bo_list)[["Signal", "Stock", "Price", "Breakout High", "Vol Surge", "Score", "Stop Loss", "Target", "RSI"]] if bo_list else pd.DataFrame(), use_container_width=True)
 
-    # 2. Top Volume
-    st.subheader("⚡ 2. Top Volume Movers Today")
-    vm = sorted([r for r in all_results if r.get("Is_High_Volume")], key=lambda x: x.get("Raw_Volume", 0), reverse=True)
-    if vm:
-        st.dataframe(pd.DataFrame(vm)[["Signal", "Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score"]], use_container_width=True)
+    st.subheader("⚡ 2. Top Volume Movers")
+    vol_list = sorted([r for r in res if r['is_vol']], key=lambda x: x['raw_vol'], reverse=True)
+    st.dataframe(pd.DataFrame(vol_list)[["Signal", "Stock", "Price", "Vol Surge", "Distance", "RSI", "Score"]] if vol_list else pd.DataFrame(), use_container_width=True)
 
-    # 3. Near Breakout
-    st.subheader(f"🔭 3. Near-Breakout Radar (Within 3%)")
-    nr = sorted([r for r in all_results if r.get("Is_Near_Breakout")], key=lambda x: x.get("Raw_Distance", 0), reverse=True)
-    if nr:
-        st.dataframe(pd.DataFrame(nr)[["Signal", "Stock", "Price", "Breakout High", "Distance to High", "Volume Surge", "RSI", "Score"]], use_container_width=True)
+    st.subheader("🔭 3. Near-Breakout Radar")
+    nr_list = sorted([r for r in res if r['is_nr']], key=lambda x: x['raw_dist'], reverse=True)
+    st.dataframe(pd.DataFrame(nr_list)[["Signal", "Stock", "Price", "Breakout High", "Distance", "Vol Surge", "RSI", "Score"]] if nr_list else pd.DataFrame(), use_container_width=True)
 
-    # 4. Exits
-    st.subheader("🔴 4. Trend Exit Alerts (21 EMA < 50 EMA)")
-    ex = [r for r in all_results if r.get("Is_Sell")]
-    if ex:
-        st.dataframe(pd.DataFrame(ex)[["Signal", "Stock", "Price", "RSI"]], use_container_width=True)
+    st.subheader("🔴 4. Trend Exit Alerts")
+    ex_list = [r for r in res if r['is_sell']]
+    st.dataframe(pd.DataFrame(ex_list)[["Signal", "Stock", "Price", "RSI"]] if ex_list else pd.DataFrame(), use_container_width=True)
 
 # ========================================================
 # TAB 3: INTRADAY OPTION MOMENTUM & MULTI-TIMEFRAME ENGINE
 # ========================================================
-with main_tab3:
+with tab3:
     st.header("🎯 Intraday Option Momentum & Volatility Extension System")
-    st.caption("Multi-Timeframe Top-Down Engine: 15M Target Ladder, Hourly Momentum, Daily PDH/PDL, and Monthly PMH/PML")
+    st.caption("Multi-Timeframe Engine: 15M Ladder, 1H Momentum, Daily PDH/PDL, Monthly PMH/PML")
 
-    PRESET_TICKERS = {
-        "NIFTY 50 (NSE)": "^NSEI",
-        "BANK NIFTY (NSE)": "^NSEBANK",
-        "FIN NIFTY (NSE)": "NIFTY_FIN_SERVICE.NS",
-        "MIDCP NIFTY (NSE)": "NIFTY_MID_SELECT.NS",
-        "SENSEX (BSE)": "^BSESN",
-        "BANKEX (BSE)": "BSE-BANK.BO",
-        "COMEX Gold (USD)": "GC=F",
-        "Custom Symbol / Stock": "CUSTOM"
+    PRESETS = {
+        "NIFTY 50 (NSE)": "^NSEI", "BANK NIFTY (NSE)": "^NSEBANK", "FIN NIFTY (NSE)": "NIFTY_FIN_SERVICE.NS",
+        "MIDCP NIFTY (NSE)": "NIFTY_MID_SELECT.NS", "SENSEX (BSE)": "^BSESN", "BANKEX (BSE)": "BSE-BANK.BO",
+        "COMEX Gold": "GC=F", "Custom": "CUSTOM"
     }
 
-    col_t1, col_t2, col_t3 = st.columns([1.8, 1.6, 1.0])
-    with col_t1:
-        chosen_preset = st.selectbox("Select Asset / Index:", list(PRESET_TICKERS.keys()), index=0)
-
-    with col_t2:
-        if PRESET_TICKERS[chosen_preset] == "CUSTOM":
-            user_ticker = st.text_input("Enter Custom Ticker:", value="RELIANCE.NS", help="e.g. TATASTEEL.NS, ^NSEI, GC=F").strip().upper()
-        else:
-            user_ticker = PRESET_TICKERS[chosen_preset]
-            st.text_input("Active Ticker Symbol:", value=user_ticker, disabled=True)
-
-    with col_t3:
-        st.write("")
-        st.write("")
+    c_s1, c_s2, c_s3 = st.columns([1.6, 1.4, 1.0])
+    with c_s1: chosen = st.selectbox("Select Asset / Index:", list(PRESETS.keys()))
+    with c_s2:
+        u_sym = st.text_input("Ticker Symbol:", value="RELIANCE.NS" if chosen == "Custom" else PRESETS[chosen], disabled=(chosen != "Custom")).strip().upper()
+    with c_s3:
+        st.write(""); st.write("")
         if st.button("🔄 Recalculate Multi-TF", type="primary"):
-            st.cache_data.clear()
-            st.rerun()
+            st.cache_data.clear(); st.rerun()
 
-    # --- Multi-Timeframe Data Acquisition ---
     @st.cache_data(ttl=60)
-    def fetch_all_timeframes(symbol):
-        d15_raw = yf.download(symbol, period="30d", interval="15m", progress=False)
-        d1h_raw = yf.download(symbol, period="60d", interval="1h", progress=False)
-        d1d_raw = yf.download(symbol, period="1y", interval="1d", progress=False)
-        d1m_raw = yf.download(symbol, period="5y", interval="1mo", progress=False)
-        return (
-            clean_yfinance_columns(d15_raw),
-            clean_yfinance_columns(d1h_raw),
-            clean_yfinance_columns(d1d_raw),
-            clean_yfinance_columns(d1m_raw)
-        )
+    def fetch_m_tf(sym):
+        d15 = clean_cols(yf.download(sym, period="30d", interval="15m", progress=False))
+        d1h = clean_cols(yf.download(sym, period="60d", interval="1h", progress=False))
+        d1d = clean_cols(yf.download(sym, period="1y", interval="1d", progress=False))
+        d1m = clean_cols(yf.download(sym, period="5y", interval="1mo", progress=False))
+        return d15, d1h, d1d, d1m
 
-    with st.spinner(f"Acquiring 15M, 1H, Daily, and Monthly feeds for {user_ticker}..."):
-        d15, d1h, d1d, d1mo = fetch_all_timeframes(user_ticker)
+    with st.spinner(f"Loading 15M, 1H, Daily, and Monthly data for {u_sym}..."):
+        d15, d1h, d1d, d1m = fetch_m_tf(u_sym)
 
     if d15 is None or d15.empty or len(d15) < 15:
-        st.error(f"Could not load intraday data for '{user_ticker}'. Please verify the symbol.")
+        st.error(f"Could not load intraday data for '{u_sym}'. Please verify the symbol.")
     else:
-        # --- 15M Mathematical Engine (Volatility Ladder) ---
-        hl_15 = d15['high'] - d15['low']
-        hc_15 = (d15['high'] - d15['close'].shift(1)).abs()
-        lc_15 = (d15['low'] - d15['close'].shift(1)).abs()
-        d15['atr'] = pd.concat([hl_15, hc_15, lc_15], axis=1).max(axis=1).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        # 15M Indicators
+        tr_15 = pd.concat([d15['high'] - d15['low'], (d15['high'] - d15['close'].shift(1)).abs(), (d15['low'] - d15['close'].shift(1)).abs()], axis=1).max(axis=1)
+        d15['atr'] = tr_15.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
         d15['ema_9'] = d15['close'].ewm(span=9, adjust=False).mean()
         d15['ema_21'] = d15['close'].ewm(span=21, adjust=False).mean()
 
-        last_15 = d15.iloc[-1]
-        c_price = float(last_15['close'])
-        c_atr = float(last_15['atr'])
-        c_ema9 = float(last_15['ema_9'])
-        c_ema21 = float(last_15['ema_21'])
+        r15 = d15.iloc[-1]
+        c_p, c_a = float(r15['close']), float(r15['atr'])
+        c_e9, c_e21 = float(r15['ema_9']), float(r15['ema_21'])
 
-        is_bullish = (c_price >= c_ema9) and (c_ema9 >= c_ema21)
-        is_bearish = (c_price < c_ema9) and (c_ema9 < c_ema21)
+        is_bull = (c_p >= c_e9) and (c_e9 >= c_e21)
+        is_bear = (c_p < c_e9) and (c_e9 < c_e21)
+        step = round(c_a * 1.5, 2)
+        h_step = round(step / 2.0, 2)
+        lbl = chosen.split('(')[0].strip()
 
-        risk_step = round(c_atr * 1.5, 2)
-        half_step = round(risk_step / 2.0, 2)
-        display_name = chosen_preset.split('(')[0].strip()
-
-        if is_bullish:
-            bias_title = f"CONTINUE VIEW UP — {display_name}"
-            box_bg = "#113b22"
-            box_border = "#00FF66"
-            fail_lvl = round(c_price - risk_step, 2)
-            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
-            r1 = round(c_price + risk_step, 2)
-            r2 = round(r1 + half_step, 2)
-            r3 = round(r2 + half_step, 2)
-            r4 = round(r3 + half_step, 2)
-            r5 = round(r4 + half_step, 2)
-            ladder_labels = [
-                ("N Upper Range 1", r1), ("N Upper Range 2", r2), ("N Upper Range 3", r3),
-                ("N Extended Upper Range 4", r4), ("N Extended Upper Range 5", r5)
-            ]
-        elif is_bearish:
-            bias_title = f"CONTINUE VIEW DOWN — {display_name}"
-            box_bg = "#421616"
-            box_border = "#FF4D4D"
-            fail_lvl = round(c_price + risk_step, 2)
-            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
-            r1 = round(c_price - risk_step, 2)
-            r2 = round(r1 - half_step, 2)
-            r3 = round(r2 - half_step, 2)
-            r4 = round(r3 - half_step, 2)
-            r5 = round(r4 - half_step, 2)
-            ladder_labels = [
-                ("N Lower Range 1", r1), ("N Lower Range 2", r2), ("N Lower Range 3", r3),
-                ("N Extended Lower Range 4", r4), ("N Extended Lower Range 5", r5)
-            ]
+        if is_bull:
+            b_title, bg, border = f"CONTINUE VIEW UP — {lbl}", "#113b22", "#00FF66"
+            f_lvl = round(c_p - step, 2)
+            f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
+            r1 = round(c_p + step, 2)
+            ladder = [(f"N Upper Range {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
+        elif is_bear:
+            b_title, bg, border = f"CONTINUE VIEW DOWN — {lbl}", "#421616", "#FF4D4D"
+            f_lvl = round(c_p + step, 2)
+            f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
+            r1 = round(c_p - step, 2)
+            ladder = [(f"N Lower Range {i+1}", round(r1 - i * h_step, 2)) for i in range(5)]
         else:
-            bias_title = f"NEUTRAL / CONSOLIDATION — {display_name}"
-            box_bg = "#222222"
-            box_border = "#888888"
-            fail_lvl = round(c_price - risk_step, 2)
-            fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
-            r1 = round(c_price + risk_step, 2)
-            r2 = round(r1 + half_step, 2)
-            r3 = round(r2 + half_step, 2)
-            r4 = round(r3 + half_step, 2)
-            r5 = round(r4 + half_step, 2)
-            ladder_labels = [
-                ("Range Level 1", r1), ("Range Level 2", r2), ("Range Level 3", r3),
-                ("Extended Range 4", r4), ("Extended Range 5", r5)
-            ]
+            b_title, bg, border = f"NEUTRAL / CONSOLIDATION — {lbl}", "#222222", "#888888"
+            f_lvl = round(c_p - step, 2)
+            f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
+            r1 = round(c_p + step, 2)
+            ladder = [(f"Range Level {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
 
-        # --- Daily Reference Calculations (PDH / PDL) ---
-        pdh_val, pdl_val = None, None
+        # Daily PDH/PDL
+        pdh_v, pdl_v = None, None
         if d1d is not None and len(d1d) >= 2:
             d1d['ema_21'] = d1d['close'].ewm(span=21, adjust=False).mean()
             d1d['ema_50'] = d1d['close'].ewm(span=50, adjust=False).mean()
-            prev_day = d1d.iloc[-2]
-            pdh_val = float(prev_day['high'])
-            pdl_val = float(prev_day['low'])
+            prev_d = d1d.iloc[-2]
+            pdh_v, pdl_v = float(prev_d['high']), float(prev_d['low'])
 
-        # --- 1-Hour Calculations ---
+        # 1-Hour indicators
         if d1h is not None and len(d1h) >= 21:
             d1h['ema_9'] = d1h['close'].ewm(span=9, adjust=False).mean()
             d1h['ema_21'] = d1h['close'].ewm(span=21, adjust=False).mean()
 
-        # --- Monthly Reference Calculations (PMH / PML) ---
-        pmh_val, pml_val = None, None
-        if d1mo is not None and len(d1mo) >= 2:
-            prev_month = d1mo.iloc[-2]
-            pmh_val = float(prev_month['high'])
-            pml_val = float(prev_month['low'])
+        # Monthly PMH/PML
+        pmh_v, pml_v = None, None
+        if d1m is not None and len(d1m) >= 2:
+            prev_m = d1m.iloc[-2]
+            pmh_v, pml_v = float(prev_m['high']), float(prev_m['low'])
 
+        # HUD Card
         time_str = now_ist.strftime("%d %b %I:%M %p (IST)")
-        items_html = "".join([
-            f"<div style='background:rgba(255,255,255,0.08);padding:10px 14px;border-radius:6px;min-width:160px;margin:4px;display:inline-block;'>"
-            f"<div style='color:#B0B0B0;font-size:12px;'>{name}</div>"
-            f"<div style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{lvl:,.2f}</div>"
-            f"</div>"
-            for name, lvl in ladder_labels
-        ])
+        hud_badges = "".join([f"<div style='background:rgba(255,255,255,0.08);padding:8px 12px;border-radius:6px;min-width:140px;margin:3px;display:inline-block;'><div style='color:#B0B0B0;font-size:12px;'>{n}</div><div style='color:#FFFFFF;font-weight:bold;font-size:16px;'>{l:,.2f}</div></div>" for n, l in ladder])
+        st.markdown(f"<div style='background-color:{bg};border:2px solid {border};border-radius:10px;padding:16px;margin-bottom:12px;'><h2 style='color:#FFF;margin:0;'>{b_title}</h2><div style='color:#E0E0E0;font-size:13px;margin:4px 0 10px 0;'>📅 {time_str} | Price: <b>{c_p:,.2f}</b></div><div style='background:rgba(0,0,0,0.35);padding:8px 14px;border-radius:6px;margin-bottom:10px;'><span style='color:#FFAA00;font-weight:bold;'>Move View Fail LVL: </span><span style='color:#FFF;font-weight:bold;font-size:17px;'>{f_str}</span></div><div style='display:flex;flex-wrap:wrap;gap:4px;'>{hud_badges}</div></div>", unsafe_allow_html=True)
 
-        hud_card = (
-            f"<div style='background-color:{box_bg};border:2px solid {box_border};border-radius:10px;padding:20px;margin-bottom:20px;'>"
-            f"<h2 style='color:#FFFFFF;margin:0 0 4px 0;'>{bias_title}</h2>"
-            f"<div style='color:#E0E0E0;font-size:13px;margin-bottom:12px;'>📅 {time_str} | Current Price: <b>{c_price:,.2f}</b></div>"
-            f"<div style='background:rgba(0,0,0,0.35);padding:10px 16px;border-radius:6px;margin-bottom:14px;'>"
-            f"<span style='color:#FFAA00;font-weight:bold;font-size:15px;'>Move View Fail LVL: </span>"
-            f"<span style='color:#FFFFFF;font-weight:bold;font-size:18px;'>{fail_str}</span>"
-            f"</div>"
-            f"<div style='display:flex;flex-wrap:wrap;gap:8px;'>"
-            f"{items_html}"
-            f"</div>"
-            f"</div>"
-        )
-        st.markdown(hud_card, unsafe_allow_html=True)
-
-        # Reference Scorecards
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Current Price", f"{c_price:,.2f}")
-        k2.metric("Fail Level", f"{fail_lvl:,.2f}")
-        k3.metric("Previous Day High (PDH)", f"{pdh_val:,.2f}" if pdh_val else "N/A")
-        k4.metric("Previous Day Low (PDL)", f"{pdl_val:,.2f}" if pdl_val else "N/A")
-
+        k1.metric("Current Price", f"{c_p:,.2f}")
+        k2.metric("Fail Level", f"{f_lvl:,.2f}")
+        k3.metric("PDH (Prev Day High)", f"{pdh_v:,.2f}" if pdh_v else "N/A")
+        k4.metric("PDL (Prev Day Low)", f"{pdl_v:,.2f}" if pdl_v else "N/A")
         st.divider()
 
-        # Multi-Timeframe Chart Layout Tabs
-        chart_tab1, chart_tab2, chart_tab3, chart_tab4 = st.tabs([
-            "⚡ 15-Minute (Execution & Target Ladder)",
-            "📅 Daily (PDH / PDL Key Levels)",
-            "⏰ 1-Hour (Swing Trend Momentum)",
-            "🏛️ Monthly (PMH / PML Macro Levels)"
-        ])
+        # 4 Multi-Timeframe Tabs
+        ct1, ct2, ct3, ct4 = st.tabs(["⚡ 15-Minute (Ladder)", "📅 Daily (PDH/PDL)", "⏰ 1-Hour (Trend)", "🏛️ Monthly (PMH/PML)"])
 
-        # CHART 1: 15-Minute Execution Chart
-        with chart_tab1:
-            st.subheader(f"15-Minute Chart — Execution & Volatility Ladder ({user_ticker})")
-            p15 = d15.iloc[-90:]
-            f15 = go.Figure()
-            f15.add_trace(go.Candlestick(x=p15.index, open=p15['open'], high=p15['high'], low=p15['low'], close=p15['close'], name="15M Candle"))
-            f15.add_trace(go.Scatter(x=p15.index, y=p15['ema_9'], line=dict(color='cyan', width=1.5), name="9 EMA"))
-            f15.add_trace(go.Scatter(x=p15.index, y=p15['ema_21'], line=dict(color='magenta', width=1.5), name="21 EMA"))
-            f15.add_hline(y=fail_lvl, line=dict(color='#FFAA00', width=2, dash='dot'), annotation_text=f"Fail LVL: {fail_lvl:,.2f}")
-            c_ladder = ['#66FF66', '#33CC33', '#009900', '#006600', '#004400']
-            for i, (name, lvl) in enumerate(ladder_labels):
-                f15.add_hline(y=lvl, line=dict(color=c_ladder[i % len(c_ladder)], width=1, dash='dash'), annotation_text=f"{name}: {lvl:,.2f}")
-            f15.update_layout(height=620,
+        with ct1:
+            h_15 = [(f_lvl, '#FFAA00', 'Fail LVL', 'dot')] + [(l, '#00FF66' if is_bull else '#FF4D4D', n, 'dash') for n, l in ladder]
+            st.plotly_chart(plot_candles(d15.iloc[-90:], f"15-Minute Target Ladder ({u_sym})", h_15, [('ema_9', 'cyan', 1.5), ('ema_21', 'magenta', 1.5)], height=560), use_container_width=True)
+
+        with ct2:
+            if d1d is not None and len(d1d) >= 10:
+                h_d = [(pdh_v, '#00FF66', 'PDH', 'dash'), (pdl_v, '#FF4D4D', 'PDL', 'dash')]
+                st.plotly_chart(plot_candles(d1d.iloc[-120:], f"Daily Key Levels ({u_sym})", h_d, [('ema_21', 'blue', 1.5), ('ema_50', 'orange', 1.5)], height=560), use_container_width=True)
+            else: st.info("Daily data not available.")
+
+        with ct3:
+            if d1h is not None and len(d1h) >= 20:
+                st.plotly_chart(plot_candles(d1h.iloc[-90:], f"1-Hour Swing Momentum ({u_sym})", None, [('ema_9', 'cyan', 1.5), ('ema_21', 'magenta', 1.5)], height=560), use_container_width=True)
+            else: st.info("1-Hour data not available.")
+
+        with ct4:
+            if d1m is not None and len(d1m) >= 5:
+                h_m = [(pmh_v, '#00FF66', 'PMH', 'dash'), (pml_v, '#FF4D4D', 'PML', 'dash')]
+                st.plotly_chart(plot_candles(d1m.iloc[-36:], f"Monthly Macro Levels ({u_sym})", h_m, height=560), use_container_width=True)
+            else: st.info("Monthly data not available.")
+
+# === END OF APY.PY ===
