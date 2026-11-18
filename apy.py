@@ -56,7 +56,7 @@ def add_indicators(df):
     df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
     return df.dropna(subset=['high_125', 'vol_sma_125', 'rsi', 'atr'])
 
-def plot_candles(df, title, hlines=None, emas=None, height=520):
+def plot_candles(df, title, hlines=None, emas=None, height=540):
     fig = go.Figure(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price"))
     if emas:
         for c, clr, w in emas:
@@ -221,7 +221,7 @@ with tab2:
 # ========================================================
 with tab3:
     st.header("🎯 Intraday Option Momentum & Volatility Extension System")
-    st.caption("Multi-Timeframe Engine: 15M Ladder, 1H Momentum, Daily PDH/PDL, Monthly PMH/PML")
+    st.caption("Multi-Timeframe Engine: Independent Signals, Fail Levels & 5-Tier Target Ladders on 15M, 1H, Daily & Monthly")
 
     PRESETS = {
         "NIFTY 50 (NSE)": "^NSEI", "BANK NIFTY (NSE)": "^NSEBANK", "FIN NIFTY (NSE)": "NIFTY_FIN_SERVICE.NS",
@@ -242,104 +242,122 @@ with tab3:
     def fetch_m_tf(sym):
         d15 = clean_cols(yf.download(sym, period="30d", interval="15m", progress=False))
         d1h = clean_cols(yf.download(sym, period="60d", interval="1h", progress=False))
-        d1d = clean_cols(yf.download(sym, period="1y", interval="1d", progress=False))
-        d1m = clean_cols(yf.download(sym, period="5y", interval="1mo", progress=False))
+        d1d = clean_cols(yf.download(sym, period="2y", interval="1d", progress=False))
+        d1m = clean_cols(yf.download(sym, period="10y", interval="1mo", progress=False))
         return d15, d1h, d1d, d1m
 
-    with st.spinner(f"Loading 15M, 1H, Daily, and Monthly data for {u_sym}..."):
+    with st.spinner(f"Loading 15M, 1H, Daily, and Monthly feeds for {u_sym}..."):
         d15, d1h, d1d, d1m = fetch_m_tf(u_sym)
 
-    if d15 is None or d15.empty or len(d15) < 15:
-        st.error(f"Could not load intraday data for '{u_sym}'. Please verify the symbol.")
-    else:
-        # 15M Indicators
-        tr_15 = pd.concat([d15['high'] - d15['low'], (d15['high'] - d15['close'].shift(1)).abs(), (d15['low'] - d15['close'].shift(1)).abs()], axis=1).max(axis=1)
-        d15['atr'] = tr_15.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-        d15['ema_9'] = d15['close'].ewm(span=9, adjust=False).mean()
-        d15['ema_21'] = d15['close'].ewm(span=21, adjust=False).mean()
+    # Universal Setup Calculator for ANY Timeframe
+    def compute_timeframe_setup(df, tf_label):
+        if df is None or df.empty or len(df) < 15:
+            return None
+        df = df.copy()
+        tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift(1)).abs(), (df['low'] - df['close'].shift(1)).abs()], axis=1).max(axis=1)
+        df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
+        df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
+        if 'ema_50' not in df.columns:
+            df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
 
-        r15 = d15.iloc[-1]
-        c_p, c_a = float(r15['close']), float(r15['atr'])
-        c_e9, c_e21 = float(r15['ema_9']), float(r15['ema_21'])
+        r = df.iloc[-1]
+        c_p = float(r['close'])
+        c_a = float(r['atr']) if not np.isnan(r['atr']) else (c_p * 0.01)
+        c_e9 = float(r['ema_9'])
+        c_e21 = float(r['ema_21'])
 
         is_bull = (c_p >= c_e9) and (c_e9 >= c_e21)
         is_bear = (c_p < c_e9) and (c_e9 < c_e21)
         step = round(c_a * 1.5, 2)
         h_step = round(step / 2.0, 2)
-        lbl = chosen.split('(')[0].strip()
 
         if is_bull:
-            b_title, bg, border = f"CONTINUE VIEW UP — {lbl}", "#113b22", "#00FF66"
+            title = f"CONTINUE VIEW UP ({tf_label})"
+            bg, border = "#113b22", "#00FF66"
             f_lvl = round(c_p - step, 2)
             f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
             r1 = round(c_p + step, 2)
-            ladder = [(f"N Upper Range {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
+            ladder = [(f"Target {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
         elif is_bear:
-            b_title, bg, border = f"CONTINUE VIEW DOWN — {lbl}", "#421616", "#FF4D4D"
+            title = f"CONTINUE VIEW DOWN ({tf_label})"
+            bg, border = "#421616", "#FF4D4D"
             f_lvl = round(c_p + step, 2)
             f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
             r1 = round(c_p - step, 2)
-            ladder = [(f"N Lower Range {i+1}", round(r1 - i * h_step, 2)) for i in range(5)]
+            ladder = [(f"Target {i+1}", round(r1 - i * h_step, 2)) for i in range(5)]
         else:
-            b_title, bg, border = f"NEUTRAL / CONSOLIDATION — {lbl}", "#222222", "#888888"
+            title = f"NEUTRAL / CONSOLIDATION ({tf_label})"
+            bg, border = "#222222", "#888888"
             f_lvl = round(c_p - step, 2)
             f_str = f"{f_lvl:,.2f} ({step:,.2f} pts)"
             r1 = round(c_p + step, 2)
-            ladder = [(f"Range Level {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
+            ladder = [(f"Range {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
 
-        # Daily PDH/PDL
-        pdh_v, pdl_v = None, None
+        return {
+            'df': df, 'price': c_p, 'atr': c_a, 'is_bull': is_bull, 'is_bear': is_bear,
+            'title': title, 'bg': bg, 'border': border, 'fail_lvl': f_lvl, 'fail_str': f_str,
+            'ladder': ladder
+        }
+
+    # Render a Timeframe Module
+    def render_tf_dashboard(setup, tf_name, extra_hlines=None, extra_emas=None, bars_to_show=90):
+        if setup is None:
+            st.warning(f"Insufficient data to build {tf_name} momentum model.")
+            return
+
+        c_p = setup['price']
+        f_lvl = setup['fail_lvl']
+        f_str = setup['fail_str']
+        is_bull = setup['is_bull']
+        ladder = setup['ladder']
+
+        # HUD Signal & Targets Banner
+        badges = "".join([f"<div style='background:rgba(255,255,255,0.08);padding:8px 12px;border-radius:6px;min-width:130px;margin:3px;display:inline-block;'><div style='color:#B0B0B0;font-size:12px;'>{n}</div><div style='color:#FFFFFF;font-weight:bold;font-size:16px;'>{l:,.2f}</div></div>" for n, l in ladder])
+        st.markdown(f"<div style='background-color:{setup['bg']};border:2px solid {setup['border']};border-radius:10px;padding:14px;margin-bottom:12px;'><h3 style='color:#FFF;margin:0;'>{setup['title']}</h3><div style='color:#E0E0E0;font-size:13px;margin:3px 0 8px 0;'>Current Close: <b>{c_p:,.2f}</b></div><div style='background:rgba(0,0,0,0.35);padding:6px 12px;border-radius:6px;margin-bottom:8px;'><span style='color:#FFAA00;font-weight:bold;'>Move View Fail LVL: </span><span style='color:#FFF;font-weight:bold;font-size:16px;'>{f_str}</span></div><div style='display:flex;flex-wrap:wrap;gap:4px;'>{badges}</div></div>", unsafe_allow_html=True)
+
+        # Plotly chart with Targets and Fail Level
+        h_lines = [(f_lvl, '#FFAA00', 'Fail LVL', 'dot')] + [(l, '#00FF66' if is_bull else '#FF4D4D', n, 'dash') for n, l in ladder]
+        if extra_hlines:
+            h_lines.extend(extra_hlines)
+
+        emas = [('ema_9', 'cyan', 1.5), ('ema_21', 'magenta', 1.5)]
+        if extra_emas:
+            emas.extend(extra_emas)
+
+        plot_data = setup['df'].iloc[-bars_to_show:]
+        st.plotly_chart(plot_candles(plot_data, f"{tf_name} Setup & Targets ({u_sym})", h_lines, emas, height=560), use_container_width=True)
+
+    # 4 Multi-Timeframe Tabs
+    ct1, ct2, ct3, ct4 = st.tabs([
+        "⚡ 15-Minute (Ladder Execution)",
+        "⏰ 1-Hour (Swing Trend & Targets)",
+        "📅 Daily (Positional & PDH/PDL Targets)",
+        "🏛️ Monthly (Macro Long-Term Targets)"
+    ])
+
+    with ct1:
+        s15 = compute_timeframe_setup(d15, "15-Minute")
+        render_tf_dashboard(s15, "15-Minute Execution", bars_to_show=90)
+
+    with ct2:
+        s1h = compute_timeframe_setup(d1h, "1-Hour")
+        render_tf_dashboard(s1h, "1-Hour Swing", bars_to_show=90)
+
+    with ct3:
+        s1d = compute_timeframe_setup(d1d, "Daily")
+        extra_d = []
         if d1d is not None and len(d1d) >= 2:
-            d1d['ema_21'] = d1d['close'].ewm(span=21, adjust=False).mean()
-            d1d['ema_50'] = d1d['close'].ewm(span=50, adjust=False).mean()
             prev_d = d1d.iloc[-2]
-            pdh_v, pdl_v = float(prev_d['high']), float(prev_d['low'])
+            extra_d = [(float(prev_d['high']), '#00FF66', 'PDH', 'dash'), (float(prev_d['low']), '#FF4D4D', 'PDL', 'dash')]
+        render_tf_dashboard(s1d, "Daily Positional", extra_hlines=extra_d, extra_emas=[('ema_50', 'orange', 1.5)], bars_to_show=120)
 
-        # 1-Hour indicators
-        if d1h is not None and len(d1h) >= 21:
-            d1h['ema_9'] = d1h['close'].ewm(span=9, adjust=False).mean()
-            d1h['ema_21'] = d1h['close'].ewm(span=21, adjust=False).mean()
-
-        # Monthly PMH/PML
-        pmh_v, pml_v = None, None
+    with ct4:
+        s1m = compute_timeframe_setup(d1m, "Monthly")
+        extra_m = []
         if d1m is not None and len(d1m) >= 2:
             prev_m = d1m.iloc[-2]
-            pmh_v, pml_v = float(prev_m['high']), float(prev_m['low'])
-
-        # HUD Card
-        time_str = now_ist.strftime("%d %b %I:%M %p (IST)")
-        hud_badges = "".join([f"<div style='background:rgba(255,255,255,0.08);padding:8px 12px;border-radius:6px;min-width:140px;margin:3px;display:inline-block;'><div style='color:#B0B0B0;font-size:12px;'>{n}</div><div style='color:#FFFFFF;font-weight:bold;font-size:16px;'>{l:,.2f}</div></div>" for n, l in ladder])
-        st.markdown(f"<div style='background-color:{bg};border:2px solid {border};border-radius:10px;padding:16px;margin-bottom:12px;'><h2 style='color:#FFF;margin:0;'>{b_title}</h2><div style='color:#E0E0E0;font-size:13px;margin:4px 0 10px 0;'>📅 {time_str} | Price: <b>{c_p:,.2f}</b></div><div style='background:rgba(0,0,0,0.35);padding:8px 14px;border-radius:6px;margin-bottom:10px;'><span style='color:#FFAA00;font-weight:bold;'>Move View Fail LVL: </span><span style='color:#FFF;font-weight:bold;font-size:17px;'>{f_str}</span></div><div style='display:flex;flex-wrap:wrap;gap:4px;'>{hud_badges}</div></div>", unsafe_allow_html=True)
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Current Price", f"{c_p:,.2f}")
-        k2.metric("Fail Level", f"{f_lvl:,.2f}")
-        k3.metric("PDH (Prev Day High)", f"{pdh_v:,.2f}" if pdh_v else "N/A")
-        k4.metric("PDL (Prev Day Low)", f"{pdl_v:,.2f}" if pdl_v else "N/A")
-        st.divider()
-
-        # 4 Multi-Timeframe Tabs
-        ct1, ct2, ct3, ct4 = st.tabs(["⚡ 15-Minute (Ladder)", "📅 Daily (PDH/PDL)", "⏰ 1-Hour (Trend)", "🏛️ Monthly (PMH/PML)"])
-
-        with ct1:
-            h_15 = [(f_lvl, '#FFAA00', 'Fail LVL', 'dot')] + [(l, '#00FF66' if is_bull else '#FF4D4D', n, 'dash') for n, l in ladder]
-            st.plotly_chart(plot_candles(d15.iloc[-90:], f"15-Minute Target Ladder ({u_sym})", h_15, [('ema_9', 'cyan', 1.5), ('ema_21', 'magenta', 1.5)], height=560), use_container_width=True)
-
-        with ct2:
-            if d1d is not None and len(d1d) >= 10:
-                h_d = [(pdh_v, '#00FF66', 'PDH', 'dash'), (pdl_v, '#FF4D4D', 'PDL', 'dash')]
-                st.plotly_chart(plot_candles(d1d.iloc[-120:], f"Daily Key Levels ({u_sym})", h_d, [('ema_21', 'blue', 1.5), ('ema_50', 'orange', 1.5)], height=560), use_container_width=True)
-            else: st.info("Daily data not available.")
-
-        with ct3:
-            if d1h is not None and len(d1h) >= 20:
-                st.plotly_chart(plot_candles(d1h.iloc[-90:], f"1-Hour Swing Momentum ({u_sym})", None, [('ema_9', 'cyan', 1.5), ('ema_21', 'magenta', 1.5)], height=560), use_container_width=True)
-            else: st.info("1-Hour data not available.")
-
-        with ct4:
-            if d1m is not None and len(d1m) >= 5:
-                h_m = [(pmh_v, '#00FF66', 'PMH', 'dash'), (pml_v, '#FF4D4D', 'PML', 'dash')]
-                st.plotly_chart(plot_candles(d1m.iloc[-36:], f"Monthly Macro Levels ({u_sym})", h_m, height=560), use_container_width=True)
-            else: st.info("Monthly data not available.")
+            extra_m = [(float(prev_m['high']), '#00FF66', 'PMH', 'dash'), (float(prev_m['low']), '#FF4D4D', 'PML', 'dash')]
+        render_tf_dashboard(s1m, "Monthly Macro", extra_hlines=extra_m, bars_to_show=48)
 
 # === END OF APY.PY ===
