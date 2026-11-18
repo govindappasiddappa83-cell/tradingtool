@@ -14,7 +14,7 @@ IST = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(IST)
 
 # Top Navigation Tabs
-main_tab1, main_tab2 = st.tabs(["🇮🇳 NSE Stocks Scanner", "🥇 Gold (XAU/USD) Dashboard"])
+main_tab1, main_tab2 = st.tabs(["🥇 Gold (XAU/USD) Dashboard", "🇮🇳 NSE Stocks Scanner"])
 
 # ========================================================
 # CORE INDICATOR ENGINE (Rules A through K)
@@ -31,6 +31,7 @@ def compute_indicators(df):
 
     # 125 Bars High Breakout
     df['high_125'] = df['high'].shift(1).rolling(125).max()
+    df['low_125'] = df['low'].shift(1).rolling(125).min()
     df['vol_sma_125'] = df['volume'].rolling(125).mean()
 
     # RSI 14
@@ -57,9 +58,131 @@ def compute_indicators(df):
     return df.dropna(subset=['high_125', 'vol_sma_125', 'rsi', 'atr'])
 
 # ========================================================
-# TAB 1: NSE STOCKS SCANNER
+# TAB 1: GOLD (XAU/USD) DASHBOARD (LOGIC FIXED)
 # ========================================================
 with main_tab1:
+    st.title("🥇 Gold (XAU/USD) Real-Time Strategy Dashboard")
+    st.caption("Accurate Spot / Futures pricing, directional Stop-Loss & Target logic, and 125-bar volume tracking.")
+
+    c_g1, c_g2 = st.columns([2, 1])
+    with c_g1:
+        gold_tf = st.radio(
+            "⏱️ **Select Gold Timeframe:**",
+            ("Daily (1D) — Macro Swing", "4-Hour (4H) — Swing", "1-Hour (1H) — Intraday / Short-Term", "15-Minute (15M) — Scalp"),
+            horizontal=True
+        )
+    with c_g2:
+        if st.button("🔄 Refresh Gold Price", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    tf_map = {
+        "Daily (1D) — Macro Swing": ("1d", "2y", "125-Day"),
+        "4-Hour (4H) — Swing": ("1h", "120d", "125-Bar"),
+        "1-Hour (1H) — Intraday / Short-Term": ("1h", "60d", "125-Hour"),
+        "15-Minute (15M) — Scalp": ("15m", "30d", "125-Bar (15M)")
+    }
+    g_interval, g_period, g_bar_label = tf_map[gold_tf]
+
+    @st.cache_data(ttl=120)
+    def fetch_gold(interval_val, period_val):
+        # We fetch GC=F for true COMEX volume data
+        df = yf.download("GC=F", period=period_val, interval=interval_val, progress=False)
+        return compute_indicators(df)
+
+    with st.spinner("Fetching live Gold market data..."):
+        gold_df = fetch_gold(g_interval, g_period)
+
+    if gold_df is None or len(gold_df) < 2:
+        st.error("Could not fetch sufficient Gold candles. Please try another timeframe.")
+    else:
+        row = gold_df.iloc[-1]
+        prev = gold_df.iloc[-2]
+
+        close = round(row['close'], 2)
+        high_125 = round(row['high_125'], 2)
+        atr_val = round(row['atr'], 2)
+        vol_ratio = round(row['volume'] / (row['vol_sma_125'] + 1e-9), 2)
+        pct_diff = round(((close - high_125) / high_125) * 100, 2)
+
+        # Rules
+        c_a = close >= high_125
+        c_b = vol_ratio >= 1.0
+        c_c = row['rsi'] < 70
+        c_d = row['atr'] > row['atr_sma_50']
+        c_e = row['close'] > row['sma_50']
+        c_f = row['ema_21'] > row['ema_50']
+        is_bearish_ema = row['ema_21'] < row['ema_50']
+
+        score = sum([c_a, c_b, c_c, c_d, c_e, c_f])
+
+        # CORRECT DIRECTIONAL RISK & TARGET CALCULATIONS
+        if c_a and c_b:
+            sig_html = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>🟢 STRONG BUY (Breakout + Volume)</span>"
+            sl_label = "Stop-Loss (-2 ATR, Below)"
+            sl_val = f"${round(close - (2 * atr_val), 2):,.2f}"
+            tgt_label = "Target (+4 ATR, 1:2 RR)"
+            tgt_val = f"${round(close + (4 * atr_val), 2):,.2f}"
+        elif is_bearish_ema:
+            sig_html = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>🔴 SELL / SHORT (21 EMA Below 50 EMA)</span>"
+            # For a SELL/SHORT: Stop-Loss MUST BE ABOVE entry, Target MUST BE BELOW entry
+            sl_label = "Stop-Loss (+2 ATR, Above)"
+            sl_val = f"${round(close + (2 * atr_val), 2):,.2f}"
+            tgt_label = "Target (-4 ATR, 1:2 RR)"
+            tgt_val = f"${round(close - (4 * atr_val), 2):,.2f}"
+        else:
+            sig_html = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>⚪ NEUTRAL (No Clear Setup)</span>"
+            sl_label = "Stop-Loss"
+            sl_val = "-"
+            tgt_label = "Target"
+            tgt_val = "-"
+
+        m1, m2, m3, m4 = st.columns([1.2, 2.2, 1.3, 1.3])
+        m1.metric("Live Gold Price (USD)", f"${close:,.2f}")
+        m2.markdown(f"**Signal**  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
+        m3.metric(sl_label, sl_val)
+        m4.metric(tgt_label, tgt_val)
+
+        st.divider()
+
+        st.subheader(f"Gold Checklist Score: {score}/6 Conditions Met")
+        k1, k2, k3 = st.columns(3)
+        k4, k5, k6 = st.columns(3)
+
+        k1.success(f"✅ A: {g_bar_label} Breakout" if c_a else f"❌ A: Below {g_bar_label} High (${high_125:,.2f}) [{pct_diff:+0.2f}%]")
+        k2.success(f"✅ B: Volume Surge ({vol_ratio}x Avg)" if c_b else f"❌ B: Low Volume ({vol_ratio}x Avg)")
+        k3.success(f"✅ C: Safe RSI ({row['rsi']:.1f} < 70)" if c_c else f"❌ C: Overbought RSI ({row['rsi']:.1f})")
+        k4.success("✅ D: Expanding Volatility" if c_d else "❌ D: Low Volatility")
+        k5.success("✅ E: Price > 50 SMA" if c_e else "❌ E: Price Below 50 SMA")
+        k6.success("✅ F: 21 EMA > 50 EMA" if c_f else "❌ F: 21 EMA < 50 EMA (Bearish)")
+
+        st.divider()
+
+        # Chart
+        st.subheader(f"Gold Technical Analysis Chart ({g_interval.upper()})")
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
+
+        fig.add_trace(go.Candlestick(x=gold_df.index, open=gold_df['open'], high=gold_df['high'], low=gold_df['low'], close=gold_df['close'], name="Price"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['high_125'], line=dict(color='orange', dash='dash'), name=f"{g_bar_label} High"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_21'], line=dict(color='blue', width=1.5), name="21 EMA"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_50'], line=dict(color='red', width=1.5), name="50 EMA"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['sma_50'], line=dict(color='yellow', width=1.5), name="50 SMA"), row=1, col=1)
+
+        v_colors = ['green' if c >= o else 'red' for c, o in zip(gold_df['close'], gold_df['open'])]
+        fig.add_trace(go.Bar(x=gold_df.index, y=gold_df['volume'], marker_color=v_colors, name="COMEX Volume"), row=2, col=1)
+        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['vol_sma_125'], line=dict(color='purple'), name="125-Avg Volume"), row=2, col=1)
+
+        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['rsi'], line=dict(color='magenta', width=1.5), name="RSI (14)"), row=3, col=1)
+        fig.add_hline(y=70, line=dict(color='red', dash='dot'), row=3, col=1)
+        fig.add_hline(y=30, line=dict(color='green', dash='dot'), row=3, col=1)
+
+        fig.update_layout(height=750, xaxis_rangeslider_visible=False, template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
+
+# ========================================================
+# TAB 2: COMPLETE NSE STOCKS SCANNER
+# ========================================================
+with main_tab2:
     st.title("🇮🇳 NSE Institutional Volume & Breakout Tracker")
 
     selected_tf = st.radio(
@@ -157,9 +280,8 @@ with main_tab1:
         except:
             return None
 
-    # New cache function name clears any corrupted old cache completely
     @st.cache_data(ttl=600)
-    def run_clean_scan(tf_interval, tf_period, label_str):
+    def run_nse_clean_scan(tf_interval, tf_period, label_str):
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(analyze_nse_stock, sym, tf_interval, tf_period, label_str): sym for sym in NIFTY_UNIVERSE}
             results = [f.result() for f in concurrent.futures.as_completed(futures)]
@@ -172,7 +294,7 @@ with main_tab1:
             st.rerun()
 
     with st.spinner(f"Analyzing all 80 stocks on {selected_tf.split('—')[0].strip()}..."):
-        all_results = run_clean_scan(interval, period, bar_label)
+        all_results = run_nse_clean_scan(interval, period, bar_label)
 
     # Section 1: Active Breakouts (BUY)
     st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Volume Surge)")
@@ -248,110 +370,3 @@ with main_tab1:
 
                 fig.update_layout(height=550, xaxis_rangeslider_visible=False, template="plotly_dark")
                 st.plotly_chart(fig, use_container_width=True)
-
-# ========================================================
-# TAB 2: GOLD (XAU/USD) DASHBOARD
-# ========================================================
-with main_tab2:
-    st.title("🥇 Gold (XAU/USD) Real-Time Strategy Dashboard")
-    st.caption("Tracking Spot / COMEX Futures (GC=F) with real volume, 125-bar breakout levels, and ATR risk rules.")
-
-    c_g1, c_g2 = st.columns([2, 1])
-    with c_g1:
-        gold_tf = st.radio(
-            "⏱️ **Select Gold Timeframe:**",
-            ("Daily (1D) — Macro Swing", "4-Hour (4H) — Swing", "1-Hour (1H) — Intraday / Short-Term", "15-Minute (15M) — Scalp"),
-            horizontal=True
-        )
-    with c_g2:
-        if st.button("🔄 Refresh Gold Price", type="primary"):
-            st.cache_data.clear()
-            st.rerun()
-
-    tf_map = {
-        "Daily (1D) — Macro Swing": ("1d", "2y", "125-Day"),
-        "4-Hour (4H) — Swing": ("1h", "120d", "125-Bar"),
-        "1-Hour (1H) — Intraday / Short-Term": ("1h", "60d", "125-Hour"),
-        "15-Minute (15M) — Scalp": ("15m", "30d", "125-Bar (15M)")
-    }
-    g_interval, g_period, g_bar_label = tf_map[gold_tf]
-
-    @st.cache_data(ttl=120)
-    def fetch_gold(interval_val, period_val):
-        df = yf.download("GC=F", period=period_val, interval=interval_val, progress=False)
-        return compute_indicators(df)
-
-    with st.spinner("Fetching live Gold market data..."):
-        gold_df = fetch_gold(g_interval, g_period)
-
-    if gold_df is None or len(gold_df) < 2:
-        st.error("Could not fetch sufficient Gold market candles. Try another timeframe or refresh.")
-    else:
-        row = gold_df.iloc[-1]
-        prev = gold_df.iloc[-2]
-
-        close = round(row['close'], 2)
-        high_125 = round(row['high_125'], 2)
-        atr_val = round(row['atr'], 2)
-        vol_ratio = round(row['volume'] / (row['vol_sma_125'] + 1e-9), 2)
-        pct_diff = round(((close - high_125) / high_125) * 100, 2)
-
-        c_a = close >= high_125
-        c_b = vol_ratio >= 1.0
-        c_c = row['rsi'] < 70
-        c_d = row['atr'] > row['atr_sma_50']
-        c_e = row['close'] > row['sma_50']
-        c_f = row['ema_21'] > row['ema_50']
-        sell_crossover = (row['ema_21'] < row['ema_50']) and (prev['ema_21'] >= prev['ema_50'])
-
-        score = sum([c_a, c_b, c_c, c_d, c_e, c_f])
-
-        if c_a and c_b:
-            sig_html = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🟢 STRONG BUY (Breakout + Volume)</span>"
-        elif sell_crossover or (row['ema_21'] < row['ema_50']):
-            sig_html = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🔴 SELL / BEARISH (21 EMA Below 50 EMA)</span>"
-        elif score >= 4:
-            sig_html = "<span style='background-color:#4D3B00; color:#FFCC00; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🟡 BULLISH TREND (Waiting on Breakout)</span>"
-        else:
-            sig_html = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>⚪ NEUTRAL / CONSOLIDATION</span>"
-
-        m1, m2, m3, m4 = st.columns([1.2, 2.5, 1.2, 1.2])
-        m1.metric("Live Gold Price (USD)", f"${close:,.2f}")
-        m2.markdown(f"**Signal**  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
-        m3.metric(f"Stop-Loss (-2 ATR)", f"${round(close - (2 * atr_val), 2):,.2f}")
-        m4.metric(f"Target (+4 ATR, 1:2 RR)", f"${round(close + (4 * atr_val), 2):,.2f}")
-
-        st.divider()
-
-        st.subheader(f"Gold Checklist Score: {score}/6 Conditions Met")
-        k1, k2, k3 = st.columns(3)
-        k4, k5, k6 = st.columns(3)
-
-        k1.success(f"✅ A: {g_bar_label} Breakout" if c_a else f"❌ A: Below {g_bar_label} High (${high_125:,.2f}) [{pct_diff:+0.2f}%]")
-        k2.success(f"✅ B: Volume Surge ({vol_ratio}x Avg)" if c_b else f"❌ B: Low Volume ({vol_ratio}x Avg)")
-        k3.success(f"✅ C: Safe RSI ({row['rsi']:.1f} < 70)" if c_c else f"❌ C: Overbought RSI ({row['rsi']:.1f})")
-        k4.success("✅ D: Expanding Volatility" if c_d else "❌ D: Low Volatility")
-        k5.success("✅ E: Price > 50 SMA" if c_e else "❌ E: Price Below 50 SMA")
-        k6.success("✅ F: 21 EMA > 50 EMA" if c_f else "❌ F: 21 EMA < 50 EMA")
-
-        st.divider()
-
-        st.subheader(f"Gold (XAU/USD) Technical Chart ({g_interval.upper()})")
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
-
-        fig.add_trace(go.Candlestick(x=gold_df.index, open=gold_df['open'], high=gold_df['high'], low=gold_df['low'], close=gold_df['close'], name="Gold Price"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['high_125'], line=dict(color='orange', dash='dash'), name=f"{g_bar_label} High"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_21'], line=dict(color='blue', width=1.5), name="21 EMA"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_50'], line=dict(color='red', width=1.5), name="50 EMA"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['sma_50'], line=dict(color='yellow', width=1.5), name="50 SMA"), row=1, col=1)
-
-        v_colors = ['green' if c >= o else 'red' for c, o in zip(gold_df['close'], gold_df['open'])]
-        fig.add_trace(go.Bar(x=gold_df.index, y=gold_df['volume'], marker_color=v_colors, name="COMEX Volume"), row=2, col=1)
-        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['vol_sma_125'], line=dict(color='purple'), name="125-Avg Volume"), row=2, col=1)
-
-        fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['rsi'], line=dict(color='magenta', width=1.5), name="RSI (14)"), row=3, col=1)
-        fig.add_hline(y=70, line=dict(color='red', dash='dot'), row=3, col=1)
-        fig.add_hline(y=30, line=dict(color='green', dash='dot'), row=3, col=1)
-
-        fig.update_layout(height=750, xaxis_rangeslider_visible=False, template="plotly_dark")
-        st.plotly_chart(fig, use_container_width=True)
