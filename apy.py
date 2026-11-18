@@ -14,7 +14,7 @@ st.set_page_config(page_title="Professional Trading Dashboard", layout="wide", p
 IST = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(IST)
 
-# Top Navigation Tabs (Added 3rd dedicated unit)
+# Top Navigation Tabs
 main_tab1, main_tab2, main_tab3 = st.tabs([
     "🥇 Gold (XAU/USD) Dashboard", 
     "🇮🇳 NSE Stocks Scanner",
@@ -22,7 +22,7 @@ main_tab1, main_tab2, main_tab3 = st.tabs([
 ])
 
 # ========================================================
-# HELPER: STRATEGY 1 INDICATOR ENGINE (125-Bar Breakout)
+# HELPER: COMMON DATA CLEANER & INDICATOR ENGINE
 # ========================================================
 def clean_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Safely flattens MultiIndex columns from yfinance."""
@@ -52,7 +52,7 @@ def compute_indicators(df):
     df['low_125'] = df['low'].shift(1).rolling(125).min()
     df['vol_sma_125'] = df['volume'].rolling(125).mean()
 
-    # 2. RSI 14 using Wilder's RMA Smoothing (Matches TradingView / Kite)
+    # 2. RSI 14 using Wilder's RMA Smoothing
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0.0)
     loss = -delta.where(delta < 0, 0.0)
@@ -300,7 +300,7 @@ with main_tab1:
             st.plotly_chart(fig, use_container_width=True)
 
 # ========================================================
-# TAB 2: COMPLETE NSE STOCKS SCANNER (Intact)
+# TAB 2: COMPLETE NSE STOCKS SCANNER
 # ========================================================
 with main_tab2:
     st.title("🇮🇳 NSE Institutional Volume & Breakout Tracker")
@@ -475,7 +475,6 @@ with main_tab3:
     # Controls
     col_c1, col_c2, col_c3 = st.columns([1.5, 1.5, 1.2])
     with col_c1:
-        default_ticker = "^NSEI"  # Nifty 50 Index default
         user_ticker = st.text_input("Enter Ticker / Symbol:", value="^NSEI", help="e.g., ^NSEI (Nifty), ^NSEBANK, RELIANCE.NS, GC=F (Gold)").strip().upper()
     with col_c2:
         selected_intraday_tf = st.selectbox(
@@ -486,7 +485,9 @@ with main_tab3:
     with col_c3:
         st.write("")
         st.write("")
-        refresh_opt_sys = st.button("🔄 Recalculate Model", type="primary")
+        if st.button("🔄 Recalculate Model", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
 
     opt_tf_map = {
         "1m (Scalp)": ("1m", "5d"),
@@ -512,13 +513,9 @@ with main_tab3:
             tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
             df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
 
-            # Dynamic Trend Bands (Fast 9 EMA & Trailing Volatility Channel)
+            # Dynamic Trend Bands (Fast 9 EMA & 21 EMA)
             df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
             df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
-
-            # Dynamic Trailing Volatility Trail (Fail Level Baseline)
-            df['trail_up'] = df['close'] - (1.5 * df['atr'])
-            df['trail_down'] = df['close'] + (1.5 * df['atr'])
 
             return df.dropna(subset=['atr', 'ema_9', 'ema_21'])
         except Exception:
@@ -537,24 +534,23 @@ with main_tab3:
         c_ema21 = float(last['ema_21'])
 
         # Establish Bias & Step Intervals
-        is_bullish = c_price >= c_ema9 and c_ema9 >= c_ema21
-        is_bearish = c_price < c_ema9 and c_ema9 < c_ema21
+        is_bullish = (c_price >= c_ema9) and (c_ema9 >= c_ema21)
+        is_bearish = (c_price < c_ema9) and (c_ema9 < c_ema21)
 
         # Base Risk Step in Points (derived from ATR)
         risk_step = round(c_atr * 1.5, 2)
         half_step = round(risk_step / 2.0, 2)
 
-        # Compute Signal Box & Levels
         if is_bullish:
             bias_title = "CONTINUE VIEW UP"
-            box_bg = "#004D20"
+            box_bg = "#113b22"
             box_border = "#00FF66"
             box_text = "#FFFFFF"
 
             fail_lvl = round(c_price - risk_step, 2)
             fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
 
-            # Exact Reverse-Engineered 5-Tier Upper Range Ladder
+            # Reverse-Engineered 5-Tier Upper Range Ladder
             r1 = round(c_price + risk_step, 2)
             r2 = round(r1 + half_step, 2)
             r3 = round(r2 + half_step, 2)
@@ -570,14 +566,14 @@ with main_tab3:
             ]
         elif is_bearish:
             bias_title = "CONTINUE VIEW DOWN"
-            box_bg = "#4D0000"
+            box_bg = "#421616"
             box_border = "#FF4D4D"
             box_text = "#FFFFFF"
 
             fail_lvl = round(c_price + risk_step, 2)
             fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
 
-            # Exact 5-Tier Lower Range Ladder
+            # Reverse-Engineered 5-Tier Lower Range Ladder
             r1 = round(c_price - risk_step, 2)
             r2 = round(r1 - half_step, 2)
             r3 = round(r2 - half_step, 2)
@@ -599,6 +595,12 @@ with main_tab3:
 
             fail_lvl = round(c_price - risk_step, 2)
             fail_str = f"{fail_lvl:,.2f} ({risk_step:,.2f} pts)"
+
             r1 = round(c_price + risk_step, 2)
             r2 = round(r1 + half_step, 2)
-            r3 =
+            r3 = round(r2 + half_step, 2)
+            r4 = round(r3 + half_step, 2)
+            r5 = round(r4 + half_step, 2)
+
+            ladder_labels = [
+                ("Range Level 1",
