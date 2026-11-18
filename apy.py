@@ -56,16 +56,6 @@ def compute_indicators(df):
 
     return df.dropna(subset=['high_125', 'vol_sma_125', 'rsi', 'atr'])
 
-# Helper to apply color styles to DataFrames
-def highlight_signal(val):
-    if "BUY" in str(val):
-        return "background-color: #004D20; color: #00FF66; font-weight: bold;"
-    elif "SELL" in str(val):
-        return "background-color: #4D0000; color: #FF4D4D; font-weight: bold;"
-    elif "NEAR" in str(val):
-        return "background-color: #4D3B00; color: #FFCC00; font-weight: bold;"
-    return ""
-
 # ========================================================
 # TAB 1: NSE STOCKS SCANNER
 # ========================================================
@@ -107,7 +97,7 @@ with main_tab1:
         "VEDL", "ZOMATO", "ZYDUSLIFE", "POLYCAB"
     ]
 
-    def analyze_nse_stock(symbol, tf_interval, tf_period):
+    def analyze_nse_stock(symbol, tf_interval, tf_period, label_str):
         try:
             ticker = f"{symbol}.NS"
             df = yf.download(ticker, period=tf_period, interval=tf_interval, progress=False)
@@ -135,7 +125,6 @@ with main_tab1:
             is_sell = (row['ema_21'] < row['ema_50']) and (prev['ema_21'] >= prev['ema_50'])
             is_near = (-3.0 <= pct_from_high < 0.0) and (vol_ratio >= 0.8)
 
-            # Signal Label with Color Emoji
             if is_buy:
                 signal_label = "🟢 BUY"
             elif is_sell:
@@ -151,28 +140,28 @@ with main_tab1:
                 "Signal": signal_label,
                 "Stock": symbol,
                 "Price": f"₹{close:,.2f}",
-                "Raw_Price": close,
-                f"{bar_label} High": f"₹{high_125:,.2f}",
+                "Breakout High": f"₹{high_125:,.2f}",
                 "Distance to High": f"{pct_from_high:+0.2f}%",
-                "Raw_Distance": pct_from_high,
                 "Volume Surge": f"{vol_ratio}x Avg",
-                "Raw_Volume": vol_ratio,
                 "RSI": round(row['rsi'], 1),
                 "Score": f"{confirm_score + (1 if cond_a else 0) + (1 if cond_b else 0)}/6",
+                "Stop Loss": f"₹{round(close - (2 * atr_val), 2):,.2f}",
+                "Target": f"₹{round(close + (4 * atr_val), 2):,.2f}",
                 "Is_Breakout": is_buy,
-                "Is_Near_Breakout": is_near,
                 "Is_High_Volume": vol_ratio >= 1.2,
+                "Is_Near_Breakout": is_near,
                 "Is_Sell": is_sell,
-                "Stop_Loss": f"₹{round(close - (2 * atr_val), 2):,.2f}",
-                "Target": f"₹{round(close + (4 * atr_val), 2):,.2f}"
+                "Raw_Volume": vol_ratio,
+                "Raw_Distance": pct_from_high
             }
         except:
             return None
 
+    # New cache function name clears any corrupted old cache completely
     @st.cache_data(ttl=600)
-    def run_nse_scan(tf_interval, tf_period):
+    def run_clean_scan(tf_interval, tf_period, label_str):
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(analyze_nse_stock, sym, tf_interval, tf_period): sym for sym in NIFTY_UNIVERSE}
+            futures = {executor.submit(analyze_nse_stock, sym, tf_interval, tf_period, label_str): sym for sym in NIFTY_UNIVERSE}
             results = [f.result() for f in concurrent.futures.as_completed(futures)]
         return [r for r in results if r is not None]
 
@@ -183,27 +172,27 @@ with main_tab1:
             st.rerun()
 
     with st.spinner(f"Analyzing all 80 stocks on {selected_tf.split('—')[0].strip()}..."):
-        all_results = run_nse_scan(interval, period)
+        all_results = run_clean_scan(interval, period, bar_label)
 
     # Section 1: Active Breakouts (BUY)
     st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Volume Surge)")
-    breakouts = [r for r in all_results if r["Is_Breakout"]]
+    breakouts = [r for r in all_results if r.get("Is_Breakout")]
     if breakouts:
-        df_bo = pd.DataFrame(breakouts)[["Signal", "Stock", "Price", f"{bar_label} High", "Volume Surge", "Score", "Stop_Loss", "Target", "RSI"]]
-        styled_bo = df_bo.style.map(highlight_signal, subset=["Signal"])
-        st.dataframe(styled_bo, use_container_width=True)
+        cols_bo = ["Signal", "Stock", "Price", "Breakout High", "Volume Surge", "Score", "Stop Loss", "Target", "RSI"]
+        df_bo = pd.DataFrame(breakouts)[[c for c in cols_bo if c in pd.DataFrame(breakouts).columns]]
+        st.dataframe(df_bo, use_container_width=True)
     else:
-        st.info(f"ℹ️ No stocks currently meeting full breakout rules on {selected_tf.split('—')[0].strip()}. Check Top Movers & Near-Breakouts below!")
+        st.info(f"ℹ️ No stocks currently meeting full breakout rules on {selected_tf.split('—')[0].strip()}. Check Top Volume Movers & Near-Breakouts below!")
 
     st.divider()
 
     # Section 2: Top Volume Movers
     st.subheader("⚡ 2. Top Volume Movers Today (Institutional Buying Radar)")
-    vol_movers = sorted([r for r in all_results if r["Is_High_Volume"]], key=lambda x: x["Raw_Volume"], reverse=True)
+    vol_movers = sorted([r for r in all_results if r.get("Is_High_Volume")], key=lambda x: x.get("Raw_Volume", 0), reverse=True)
     if vol_movers:
-        df_vol = pd.DataFrame(vol_movers)[["Signal", "Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score"]]
-        styled_vol = df_vol.style.map(highlight_signal, subset=["Signal"])
-        st.dataframe(styled_vol, use_container_width=True)
+        cols_vol = ["Signal", "Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score"]
+        df_vol = pd.DataFrame(vol_movers)[[c for c in cols_vol if c in pd.DataFrame(vol_movers).columns]]
+        st.dataframe(df_vol, use_container_width=True)
     else:
         st.info("ℹ️ No unusual volume surges (>1.2x average) detected right now.")
 
@@ -211,11 +200,11 @@ with main_tab1:
 
     # Section 3: Near-Breakout Radar
     st.subheader(f"🔭 3. Near-Breakout Radar (Within 3% of {bar_label} High)")
-    near_bo = sorted([r for r in all_results if r["Is_Near_Breakout"]], key=lambda x: x["Raw_Distance"], reverse=True)
+    near_bo = sorted([r for r in all_results if r.get("Is_Near_Breakout")], key=lambda x: x.get("Raw_Distance", 0), reverse=True)
     if near_bo:
-        df_near = pd.DataFrame(near_bo)[["Signal", "Stock", "Price", f"{bar_label} High", "Distance to High", "Volume Surge", "RSI", "Score"]]
-        styled_near = df_near.style.map(highlight_signal, subset=["Signal"])
-        st.dataframe(styled_near, use_container_width=True)
+        cols_near = ["Signal", "Stock", "Price", "Breakout High", "Distance to High", "Volume Surge", "RSI", "Score"]
+        df_near = pd.DataFrame(near_bo)[[c for c in cols_near if c in pd.DataFrame(near_bo).columns]]
+        st.dataframe(df_near, use_container_width=True)
     else:
         st.info(f"ℹ️ No stocks currently within 3% of their {bar_label} high.")
 
@@ -223,11 +212,11 @@ with main_tab1:
 
     # Section 4: Exit Alerts (SELL)
     st.subheader("🔴 4. Trend Exit Alerts (21 EMA < 50 EMA)")
-    sells = [r for r in all_results if r["Is_Sell"]]
+    sells = [r for r in all_results if r.get("Is_Sell")]
     if sells:
-        df_sells = pd.DataFrame(sells)[["Signal", "Stock", "Price", "RSI"]]
-        styled_sells = df_sells.style.map(highlight_signal, subset=["Signal"])
-        st.dataframe(styled_sells, use_container_width=True)
+        cols_sell = ["Signal", "Stock", "Price", "RSI"]
+        df_sells = pd.DataFrame(sells)[[c for c in cols_sell if c in pd.DataFrame(sells).columns]]
+        st.dataframe(df_sells, use_container_width=True)
     else:
         st.info("ℹ️ No fresh sell crossovers on this timeframe.")
 
@@ -317,7 +306,6 @@ with main_tab2:
 
         score = sum([c_a, c_b, c_c, c_d, c_e, c_f])
 
-        # Automatic Visual Signal Banner
         if c_a and c_b:
             sig_html = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🟢 STRONG BUY (Breakout + Volume)</span>"
         elif sell_crossover or (row['ema_21'] < row['ema_50']):
