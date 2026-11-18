@@ -56,8 +56,18 @@ def compute_indicators(df):
 
     return df.dropna(subset=['high_125', 'vol_sma_125', 'rsi', 'atr'])
 
+# Helper to apply color styles to DataFrames
+def highlight_signal(val):
+    if "BUY" in str(val):
+        return "background-color: #004D20; color: #00FF66; font-weight: bold;"
+    elif "SELL" in str(val):
+        return "background-color: #4D0000; color: #FF4D4D; font-weight: bold;"
+    elif "NEAR" in str(val):
+        return "background-color: #4D3B00; color: #FFCC00; font-weight: bold;"
+    return ""
+
 # ========================================================
-# TAB 1: COMPLETE NSE STOCKS SCANNER
+# TAB 1: NSE STOCKS SCANNER
 # ========================================================
 with main_tab1:
     st.title("🇮🇳 NSE Institutional Volume & Breakout Tracker")
@@ -121,10 +131,24 @@ with main_tab1:
             cond_e = row['close'] > row['sma_50']
             cond_f = row['ema_21'] > row['ema_50']
 
+            is_buy = cond_a and cond_b
             is_sell = (row['ema_21'] < row['ema_50']) and (prev['ema_21'] >= prev['ema_50'])
+            is_near = (-3.0 <= pct_from_high < 0.0) and (vol_ratio >= 0.8)
+
+            # Signal Label with Color Emoji
+            if is_buy:
+                signal_label = "🟢 BUY"
+            elif is_sell:
+                signal_label = "🔴 SELL"
+            elif is_near:
+                signal_label = "🟡 NEAR BUY"
+            else:
+                signal_label = "⚪ NEUTRAL"
+
             confirm_score = sum([cond_c, cond_d, cond_e, cond_f])
 
             return {
+                "Signal": signal_label,
                 "Stock": symbol,
                 "Price": f"₹{close:,.2f}",
                 "Raw_Price": close,
@@ -135,8 +159,8 @@ with main_tab1:
                 "Raw_Volume": vol_ratio,
                 "RSI": round(row['rsi'], 1),
                 "Score": f"{confirm_score + (1 if cond_a else 0) + (1 if cond_b else 0)}/6",
-                "Is_Breakout": cond_a and cond_b,
-                "Is_Near_Breakout": (-3.0 <= pct_from_high < 0.0) and (vol_ratio >= 0.8),
+                "Is_Breakout": is_buy,
+                "Is_Near_Breakout": is_near,
                 "Is_High_Volume": vol_ratio >= 1.2,
                 "Is_Sell": is_sell,
                 "Stop_Loss": f"₹{round(close - (2 * atr_val), 2):,.2f}",
@@ -161,24 +185,25 @@ with main_tab1:
     with st.spinner(f"Analyzing all 80 stocks on {selected_tf.split('—')[0].strip()}..."):
         all_results = run_nse_scan(interval, period)
 
-    # Section 1: Active Breakouts
+    # Section 1: Active Breakouts (BUY)
     st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Volume Surge)")
     breakouts = [r for r in all_results if r["Is_Breakout"]]
     if breakouts:
-        df_bo = pd.DataFrame(breakouts)[["Stock", "Price", f"{bar_label} High", "Volume Surge", "Score", "Stop_Loss", "Target", "RSI"]]
-        st.dataframe(df_bo, use_container_width=True)
+        df_bo = pd.DataFrame(breakouts)[["Signal", "Stock", "Price", f"{bar_label} High", "Volume Surge", "Score", "Stop_Loss", "Target", "RSI"]]
+        styled_bo = df_bo.style.map(highlight_signal, subset=["Signal"])
+        st.dataframe(styled_bo, use_container_width=True)
     else:
-        st.info(f"ℹ️ No stocks currently at exact 0% breakout with volume surge on {selected_tf.split('—')[0].strip()}. Check Section 2 below for active volume!")
+        st.info(f"ℹ️ No stocks currently meeting full breakout rules on {selected_tf.split('—')[0].strip()}. Check Top Movers & Near-Breakouts below!")
 
     st.divider()
 
     # Section 2: Top Volume Movers
     st.subheader("⚡ 2. Top Volume Movers Today (Institutional Buying Radar)")
-    st.write("Stocks where current volume is substantially higher than the 125-bar average, showing active money inflow:")
     vol_movers = sorted([r for r in all_results if r["Is_High_Volume"]], key=lambda x: x["Raw_Volume"], reverse=True)
     if vol_movers:
-        df_vol = pd.DataFrame(vol_movers)[["Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score"]]
-        st.dataframe(df_vol, use_container_width=True)
+        df_vol = pd.DataFrame(vol_movers)[["Signal", "Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score"]]
+        styled_vol = df_vol.style.map(highlight_signal, subset=["Signal"])
+        st.dataframe(styled_vol, use_container_width=True)
     else:
         st.info("ℹ️ No unusual volume surges (>1.2x average) detected right now.")
 
@@ -186,22 +211,23 @@ with main_tab1:
 
     # Section 3: Near-Breakout Radar
     st.subheader(f"🔭 3. Near-Breakout Radar (Within 3% of {bar_label} High)")
-    st.write("Stocks setting up right below the breakout ceiling with strong volume — catch them before they cross:")
     near_bo = sorted([r for r in all_results if r["Is_Near_Breakout"]], key=lambda x: x["Raw_Distance"], reverse=True)
     if near_bo:
-        df_near = pd.DataFrame(near_bo)[["Stock", "Price", f"{bar_label} High", "Distance to High", "Volume Surge", "RSI", "Score"]]
-        st.dataframe(df_near, use_container_width=True)
+        df_near = pd.DataFrame(near_bo)[["Signal", "Stock", "Price", f"{bar_label} High", "Distance to High", "Volume Surge", "RSI", "Score"]]
+        styled_near = df_near.style.map(highlight_signal, subset=["Signal"])
+        st.dataframe(styled_near, use_container_width=True)
     else:
         st.info(f"ℹ️ No stocks currently within 3% of their {bar_label} high.")
 
     st.divider()
 
-    # Section 4: Exit Alerts
+    # Section 4: Exit Alerts (SELL)
     st.subheader("🔴 4. Trend Exit Alerts (21 EMA < 50 EMA)")
     sells = [r for r in all_results if r["Is_Sell"]]
     if sells:
-        df_sells = pd.DataFrame(sells)[["Stock", "Price", "RSI"]]
-        st.dataframe(df_sells, use_container_width=True)
+        df_sells = pd.DataFrame(sells)[["Signal", "Stock", "Price", "RSI"]]
+        styled_sells = df_sells.style.map(highlight_signal, subset=["Signal"])
+        st.dataframe(styled_sells, use_container_width=True)
     else:
         st.info("ℹ️ No fresh sell crossovers on this timeframe.")
 
@@ -291,22 +317,19 @@ with main_tab2:
 
         score = sum([c_a, c_b, c_c, c_d, c_e, c_f])
 
+        # Automatic Visual Signal Banner
         if c_a and c_b:
-            sig = "🟢 STRONG BREAKOUT BUY"
-            sig_color = "#00C853"
+            sig_html = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🟢 STRONG BUY (Breakout + Volume)</span>"
+        elif sell_crossover or (row['ema_21'] < row['ema_50']):
+            sig_html = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🔴 SELL / BEARISH (21 EMA Below 50 EMA)</span>"
         elif score >= 4:
-            sig = "🟡 BULLISH TREND (Waiting for Breakout)"
-            sig_color = "#FFAB00"
-        elif sell_crossover:
-            sig = "🔴 SELL / EXIT (EMA Breakdown)"
-            sig_color = "#D50000"
+            sig_html = "<span style='background-color:#4D3B00; color:#FFCC00; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>🟡 BULLISH TREND (Waiting on Breakout)</span>"
         else:
-            sig = "⚪ NEUTRAL / CONSOLIDATION"
-            sig_color = "#888888"
+            sig_html = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:22px;'>⚪ NEUTRAL / CONSOLIDATION</span>"
 
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4 = st.columns([1.2, 2.5, 1.2, 1.2])
         m1.metric("Live Gold Price (USD)", f"${close:,.2f}")
-        m2.markdown(f"**Signal**  \n<h3 style='color:{sig_color};margin:0;'>{sig}</h3>", unsafe_allow_html=True)
+        m2.markdown(f"**Signal**  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
         m3.metric(f"Stop-Loss (-2 ATR)", f"${round(close - (2 * atr_val), 2):,.2f}")
         m4.metric(f"Target (+4 ATR, 1:2 RR)", f"${round(close + (4 * atr_val), 2):,.2f}")
 
