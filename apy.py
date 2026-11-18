@@ -21,12 +21,15 @@ tab1, tab2, tab3 = st.tabs([
 # 1. CORE UTILITIES & INDICATORS
 # ========================================================
 def clean_cols(df):
-    if df is None or df.empty: return df
+    if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
         l0 = [str(c).lower() for c in df.columns.get_level_values(0)]
-        df.columns = df.columns.get_level_values(0 if ('close' in l0 or 'open' in l0) else 1)
+        df.columns = df.columns.get_level_values(0 if any(k in l0 for k in ['close', 'open', 'high', 'low']) else 1)
     df.columns = [str(c).lower() for c in df.columns]
-    return df
+    req = ['open', 'high', 'low', 'close', 'volume']
+    if not all(c in df.columns for c in req): return None
+    df = df[req].dropna(subset=['open', 'high', 'low', 'close']).copy()
+    return df if len(df) >= 15 else None
 
 def calc_atr_emas(df):
     if df is None or df.empty or len(df) < 14: return df
@@ -57,7 +60,7 @@ def plot_candles(df, title, hlines=None, emas=None, buy_pts=None, sell_pts=None,
 # TAB 1: GOLD (XAU/USD) DASHBOARD
 # ========================================================
 with tab1:
-    g_mode = st.radio("🎯 Choose Gold Strategy:", ("Strategy 2: VWAP + 9 EMA + High/Low Levels", "Strategy 1: 125-Bar Breakout"), horizontal=True)
+    g_mode = st.radio("🎯 Choose Gold Strategy:", ("Strategy 2: VWAP + 9 EMA + Key High/Low Levels", "Strategy 1: 125-Bar Breakout"), horizontal=True)
 
     if "Strategy 2" in g_mode:
         st.subheader("⚡ Gold Strategy 2: VWAP + 9 EMA + Key High/Low Levels")
@@ -151,13 +154,19 @@ with tab1:
             st.plotly_chart(plot_candles(gdf1.iloc[-120:], f"Gold {tf_choice}", [(h125, 'orange', '125 High', 'dash')], [('ema_21','blue',1.5), ('ema_50','red',1.5)]), use_container_width=True)
 
 # ========================================================
-# TAB 2: NSE STOCKS SCANNER
+# TAB 2: NSE STOCKS SCANNER (5 TIMEFRAMES SUPPORTED)
 # ========================================================
 with tab2:
     st.title("🇮🇳 NSE Institutional Volume & Breakout Tracker")
-    sel_tf = st.radio("⏱️ Timeframe:", ("Daily (1D)", "1-Hour (1H)"), horizontal=True)
-    is_d = "Daily" in sel_tf
-    s_iv, s_pr = ("1d", "2y") if is_d else ("1h", "60d")
+    sel_tf = st.radio("⏱️ Scanner Timeframe:", ("15-Minute (15M)", "30-Minute (30M)", "1-Hour (1H)", "Daily (1D)", "Monthly (1M)"), horizontal=True, index=3)
+    tf_scan_cfg = {
+        "15-Minute (15M)": ("15m", "30d", 125, "125-Bar (15M)"),
+        "30-Minute (30M)": ("30m", "30d", 125, "125-Bar (30M)"),
+        "1-Hour (1H)": ("1h", "60d", 125, "125-Hour"),
+        "Daily (1D)": ("1d", "2y", 125, "125-Day"),
+        "Monthly (1M)": ("1mo", "10y", 24, "24-Month")
+    }
+    s_iv, s_pr, s_bars, bar_label = tf_scan_cfg[sel_tf]
 
     NIFTY_UNIVERSE = [
         "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BPCL",
@@ -173,64 +182,68 @@ with tab2:
     def scan_one(sym):
         try:
             df = clean_cols(yf.download(f"{sym}.NS", period=s_pr, interval=s_iv, progress=False))
-            if df is None or len(df) < 130: return None
-            df = df[['open', 'high', 'low', 'close', 'volume']].copy()
-            df['high_125'] = df['high'].shift(1).rolling(125).max()
-            df['vol_sma_125'] = df['volume'].rolling(125).mean()
+            if df is None or len(df) < (s_bars + 10): return None
+            df['high_ref'] = df['high'].shift(1).rolling(s_bars).max()
+            df['vol_ref'] = df['volume'].rolling(s_bars).mean()
             d = df['close'].diff()
             ag = d.where(d > 0, 0.0).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
             al = (-d.where(d < 0, 0.0)).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
             df['rsi'] = 100.0 - (100.0 / (1.0 + (ag / (al + 1e-9))))
             tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift(1)).abs(), (df['low'] - df['close'].shift(1)).abs()], axis=1).max(axis=1)
             df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-            df['atr_sma_50'] = df['atr'].rolling(50).mean()
-            df['sma_50'] = df['close'].rolling(50).mean()
+            df['atr_sma_50'] = df['atr'].rolling(min(50, len(df)-1)).mean()
+            df['sma_50'] = df['close'].rolling(min(50, len(df)-1)).mean()
             df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
             df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+            df = df.dropna(subset=['high_ref', 'vol_ref', 'rsi', 'atr'])
+            if len(df) < 2: return None
 
             r, prev = df.iloc[-1], df.iloc[-2]
-            p, h, a = round(float(r['close']), 2), round(float(r['high_125']), 2), round(float(r['atr']), 2)
-            vr = round(float(r['volume']) / (float(r['vol_sma_125']) + 1e-9), 2)
-            dist = round(((p - h) / h) * 100, 2)
+            p = round(float(r['close']), 2)
+            h = round(float(r['high_ref']), 2)
+            a = round(float(r['atr']), 2)
+            vr = round(float(r['volume']) / (float(r['vol_ref']) + 1e-9), 2)
+            dist = round(((p - h) / (h + 1e-9)) * 100, 2)
             is_bo = (p >= h) and (vr >= 1.0)
             is_sell = (r['ema_21'] < r['ema_50']) and (prev['ema_21'] >= prev['ema_50'])
             is_nr = (-3.0 <= dist < 0.0) and (vr >= 0.8)
-            sc = sum([int(r['rsi'] < 70), int(r['atr'] > r['atr_sma_50']), int(r['close'] > r['sma_50']), int(r['ema_21'] > r['ema_50'])])
+            sc = sum([int(r['rsi'] < 70), int(r['atr'] > r['atr_sma_50']), int(r['close'] > r['sma_50']), int(r['ema_21'] > r['ema_50'])]) + (1 if is_bo else 0)
+
             return {
                 "Signal": "🟢 BUY" if is_bo else ("🔴 SELL" if is_sell else ("🟡 NEAR" if is_nr else "⚪ HOLD")),
                 "Stock": sym, "Price": f"₹{p:,.2f}", "Breakout High": f"₹{h:,.2f}", "Distance": f"{dist:+0.2f}%",
-                "Vol Surge": f"{vr}x", "RSI": round(float(r['rsi']), 1), "Score": f"{sc + (1 if is_bo else 0)}/6",
+                "Vol Surge": f"{vr}x", "RSI": round(float(r['rsi']), 1), "Score": f"{sc}/5",
                 "Stop Loss": f"₹{round(p - 2*a, 2):,.2f}", "Target": f"₹{round(p + 4*a, 2):,.2f}",
                 "is_bo": is_bo, "is_vol": vr >= 1.2, "is_nr": is_nr, "is_sell": is_sell, "raw_vol": vr, "raw_dist": dist
             }
         except Exception: return None
 
     @st.cache_data(ttl=600)
-    def run_all_scans():
+    def run_all_scans(timeframe_key):
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             return [r for r in ex.map(scan_one, NIFTY_UNIVERSE) if r is not None]
 
     if st.button("🔄 Force Re-Scan NSE", type="primary"):
         st.cache_data.clear(); st.rerun()
 
-    with st.spinner("Screening 80 NSE assets..."):
-        res = run_all_scans()
+    with st.spinner(f"Screening 80 NSE assets on {sel_tf}..."):
+        res = run_all_scans(sel_tf)
 
-    st.subheader("🎯 1. Active Breakouts")
+    st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Vol Surge)")
     bo_l = [r for r in res if r['is_bo']]
-    st.dataframe(pd.DataFrame(bo_l)[["Signal", "Stock", "Price", "Breakout High", "Vol Surge", "Score", "Stop Loss", "Target", "RSI"]] if bo_l else pd.DataFrame(), use_container_width=True)
+    st.dataframe(pd.DataFrame(bo_l)[["Signal", "Stock", "Price", "Breakout High", "Vol Surge", "Score", "Stop Loss", "Target", "RSI"]] if bo_l else pd.DataFrame(columns=["Status"]), use_container_width=True)
 
     st.subheader("⚡ 2. Top Volume Movers")
     vo_l = sorted([r for r in res if r['is_vol']], key=lambda x: x['raw_vol'], reverse=True)
-    st.dataframe(pd.DataFrame(vo_l)[["Signal", "Stock", "Price", "Vol Surge", "Distance", "RSI", "Score"]] if vo_l else pd.DataFrame(), use_container_width=True)
+    st.dataframe(pd.DataFrame(vo_l)[["Signal", "Stock", "Price", "Vol Surge", "Distance", "RSI", "Score"]] if vo_l else pd.DataFrame(columns=["Status"]), use_container_width=True)
 
-    st.subheader("🔭 3. Near-Breakout Radar")
+    st.subheader(f"🔭 3. Near-Breakout Radar (Within 3% of {bar_label} High)")
     nr_l = sorted([r for r in res if r['is_nr']], key=lambda x: x['raw_dist'], reverse=True)
-    st.dataframe(pd.DataFrame(nr_l)[["Signal", "Stock", "Price", "Breakout High", "Distance", "Vol Surge", "RSI", "Score"]] if nr_l else pd.DataFrame(), use_container_width=True)
+    st.dataframe(pd.DataFrame(nr_l)[["Signal", "Stock", "Price", "Breakout High", "Distance", "Vol Surge", "RSI", "Score"]] if nr_l else pd.DataFrame(columns=["Status"]), use_container_width=True)
 
     st.subheader("🔴 4. Trend Exit Alerts")
     ex_l = [r for r in res if r['is_sell']]
-    st.dataframe(pd.DataFrame(ex_l)[["Signal", "Stock", "Price", "RSI"]] if ex_l else pd.DataFrame(), use_container_width=True)
+    st.dataframe(pd.DataFrame(ex_l)[["Signal", "Stock", "Price", "RSI"]] if ex_l else pd.DataFrame(columns=["Status"]), use_container_width=True)
 
 # ========================================================
 # TAB 3: INTRADAY OPTION MOMENTUM & MULTI-TIMEFRAME ENGINE
@@ -270,7 +283,8 @@ with tab3:
             st.warning(f"Insufficient data for {tf_name}."); return
 
         r = df.iloc[-1]
-        c_p, c_a = float(r['close']), (float(r['atr']) if not np.isnan(r['atr']) else float(r['close']) * 0.01)
+        c_p = float(r['close'])
+        c_a = float(r['atr']) if (('atr' in r) and not np.isnan(r['atr'])) else (c_p * 0.01)
         c_e9, c_e21 = float(r['ema_9']), float(r['ema_21'])
 
         is_bull = (c_p >= c_e9) and (c_e9 >= c_e21)
@@ -299,12 +313,12 @@ with tab3:
             r1 = round(c_p + step, 2)
             ladder = [(f"Range {i+1}", round(r1 + i * h_step, 2)) for i in range(5)]
 
-        # KPI Row
+        # KPI Metrics Row
         k1, k2, k3, k4, k5 = st.columns([1.5, 1.2, 1.3, 1.2, 1.2])
         k1.metric("Signal", badge); k2.metric("Current Price", f"{c_p:,.2f}"); k3.metric("Stop Loss (Fail LVL)", f"{f_lvl:,.2f}")
         k4.metric("Target 1", f"{ladder[0][1]:,.2f}"); k5.metric("Target 3", f"{ladder[2][1]:,.2f}")
 
-        # HUD Badge Card
+        # Visual HUD Card
         badges_html = "".join([f"<div style='background:rgba(255,255,255,0.08);padding:8px 12px;border-radius:6px;min-width:130px;margin:3px;display:inline-block;'><div style='color:#B0B0B0;font-size:12px;'>{n}</div><div style='color:#FFF;font-weight:bold;font-size:16px;'>{l:,.2f}</div></div>" for n, l in ladder])
         st.markdown(f"<div style='background-color:{bg};border:2px solid {border};border-radius:10px;padding:14px;margin-bottom:12px;'><h3 style='color:#FFF;margin:0;'>{title}</h3><div style='color:#E0E0E0;font-size:13px;margin:3px 0 8px 0;'>Current Close: <b>{c_p:,.2f}</b> | Mode: <b>{act}</b></div><div style='background:rgba(0,0,0,0.35);padding:6px 12px;border-radius:6px;margin-bottom:8px;'><span style='color:#FFAA00;font-weight:bold;'>Move View Fail LVL: </span><span style='color:#FFF;font-weight:bold;font-size:16px;'>{f_str}</span></div><div style='display:flex;flex-wrap:wrap;gap:4px;'>{badges_html}</div></div>", unsafe_allow_html=True)
 
