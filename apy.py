@@ -54,6 +54,7 @@ with st.sidebar:
 
     if auto_refresh:
         st.markdown(f"<script>setTimeout(function(){{ window.parent.postMessage({{type: 'streamlit:rerun'}}, '*'); }}, {refresh_rate * 1000});</script>", unsafe_allow_html=True)
+        st.caption(f"⚡ Live polling every {refresh_rate} seconds active.")
 
     st.markdown("---")
     st.markdown("### 🧮 Portfolio Risk Engine")
@@ -131,8 +132,17 @@ def draw_chart(df, title, lines=None):
     fig.update_layout(title=title, height=500, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
     return fig
 
-# --- TOP STATUS ---
-st.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
+# ========================================================
+# 4. TOP EXECUTIVE HEADER WITH PROMINENT SCAN / REFRESH
+# ========================================================
+top_col1, top_col2 = st.columns([3, 1.2])
+with top_col1:
+    st.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
+with top_col2:
+    if st.button("🔄 Refresh Data & Clear Cache", type="primary", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
 tab1, tab2, tab3, tab4 = st.tabs([
     "🥇 Gold (XAU/USD)", 
     "🎯 Intraday Option Momentum", 
@@ -285,8 +295,13 @@ with tab2:
 # ========================================================
 with tab3:
     st.subheader("📡 Real-Time Market Breakout Scanner")
-    if st.button("🔎 Run Full Scanner", type="primary"):
-        st.cache_data.clear()
+    
+    # Dedicated prominent action button for scanner
+    s_col1, s_col2 = st.columns([1.5, 3])
+    with s_col1:
+        run_scan = st.button("🔎 Run Full Real-Time Scanner", type="primary", use_container_width=True)
+    with s_col2:
+        st.caption("Scans active momentum & breakdown triggers across Equities, Commodities, and Forex.")
 
     scan_list = [
         ("NIFTY 50", "^NSEI"),
@@ -320,7 +335,6 @@ with tab4:
     st.subheader("🏛️ Goldman Sachs Quantitative Investment Strategies (QIS) Hub")
     st.caption("Institutional Multi-Asset Factor Model: Commodities (Gold), Forex Currencies & Global Indices")
 
-    # Filter Category selector
     cat_filter = st.radio("Asset Class Filter:", ("All Assets", "Commodities (Gold)", "Currencies / Forex", "Indices"), horizontal=True)
 
     def filter_assets(c):
@@ -360,7 +374,6 @@ with tab4:
         z_val = float(last['z_score'])
         atr_val = float(last['atr'])
 
-        # Institutional Inverse Volatility Sizing
         vol_scalar = np.clip(target_vol / max(r_vol, 0.04), 0.25, 2.5)
         risk_dist = atr_val * 1.5
         lot_sz = gs_meta.get("lot_size", 1)
@@ -382,7 +395,6 @@ with tab4:
             tp1_v = round(p_price + risk_dist, 4) if p_price < 500 else round(p_price + risk_dist, 2)
             tp2_v = round(p_price + 2*risk_dist, 4) if p_price < 500 else round(p_price + 2*risk_dist, 2)
 
-        # Executive Metrics
         p_str = f"{p_price:,.4f}" if p_price < 500 else f"${p_price:,.2f}" if "Gold" in gs_asset else f"{p_price:,.2f}"
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Quant Factor Signal", q_signal)
@@ -391,7 +403,6 @@ with tab4:
         m4.metric("Realized Volatility", f"{r_vol*100:.1f}%")
         m5.metric("Target Lot Allocation", f"{calc_lots} Lots ({calc_lots * lot_sz} Units)")
 
-        # Telegram Instant Dispatcher
         st.markdown("---")
         t_col1, t_col2 = st.columns([3, 1])
         with t_col1:
@@ -416,7 +427,6 @@ with tab4:
                 else:
                     st.error("Telegram error: Please verify your Bot Token & Chat ID in the sidebar.")
 
-        # Quant Factor Charts
         fig_gs = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.7, 0.3])
         fig_gs.add_trace(go.Candlestick(x=gs_df.index, open=gs_df['open'], high=gs_df['high'], low=gs_df['low'], close=gs_df['close'], name="Price"), 1, 1)
         fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['sma_20'], line=dict(color='yellow', width=1.2), name="Fast SMA (20)"), 1, 1)
@@ -424,7 +434,6 @@ with tab4:
         fig_gs.add_hline(y=sl_v, line=dict(color='#FF4D4D', dash='dash'), annotation_text="Quant SL", row=1, col=1)
         fig_gs.add_hline(y=tp1_v, line=dict(color='#00FF66', dash='dash'), annotation_text="Target 1", row=1, col=1)
 
-        # Z-Score Subplot
         fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Momentum Z-Score"), 2, 1)
         fig_gs.add_hline(y=1.25, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
         fig_gs.add_hline(y=-1.25, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
