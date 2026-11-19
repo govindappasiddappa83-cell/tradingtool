@@ -6,14 +6,18 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, time
 import pytz
+import requests
 
 st.set_page_config(
-    page_title="Professional Trading Terminal | Pro Edition",
+    page_title="Professional Quant Terminal | Pro Edition",
     layout="wide",
     page_icon="⚡",
     initial_sidebar_state="expanded"
 )
 
+# ========================================================
+# 1. CORE TIME & SYMBOL REGISTRY
+# ========================================================
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
@@ -24,10 +28,13 @@ ASSET_SPECS = {
     "MIDCP NIFTY (NSE)": {"symbol": "NIFTY_MID_SELECT.NS", "strike_step": 25, "lot_size": 50},
     "SENSEX (BSE)": {"symbol": "^BSESN", "strike_step": 100, "lot_size": 10},
     "COMEX Gold": {"symbol": "GC=F", "strike_step": 5, "lot_size": 1},
+    "S&P 500 (US)": {"symbol": "^GSPC", "strike_step": 10, "lot_size": 1},
     "Custom": {"symbol": "CUSTOM", "strike_step": 50, "lot_size": 1}
 }
 
-# --- SIDEBAR: RISK & REFRESH ---
+# ========================================================
+# 2. SIDEBAR: RISK ENGINE, TELEGRAM & AUTO-REFRESH
+# ========================================================
 with st.sidebar:
     st.markdown("### ⚙️ Terminal Settings")
     auto_refresh = st.checkbox("🔄 Enable Auto-Refresh", value=False)
@@ -38,11 +45,26 @@ with st.sidebar:
         st.markdown(f"<script>setTimeout(function(){{ window.parent.postMessage({{type: 'streamlit:rerun'}}, '*'); }}, {refresh_rate * 1000});</script>", unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### 🧮 Position Sizing")
+    st.markdown("### 🧮 Portfolio Risk Engine")
     account_capital = st.number_input("Capital (₹ / $):", min_value=1000.0, value=200000.0, step=10000.0)
     risk_pct = st.slider("Risk Per Trade (%):", min_value=0.25, max_value=5.0, value=1.0, step=0.25)
     max_risk_amount = (account_capital * risk_pct) / 100.0
     st.info(f"Max Loss Allowed: **{max_risk_amount:,.2f}**")
+
+    st.markdown("---")
+    st.markdown("### 📱 Telegram Signal Bot")
+    tg_token = st.text_input("Bot Token:", type="password", placeholder="Paste Bot Token here")
+    tg_chat_id = st.text_input("Chat ID:", placeholder="Paste Chat ID here")
+
+def send_telegram(msg):
+    if tg_token and tg_chat_id:
+        url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+        try:
+            requests.post(url, json={"chat_id": tg_chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=8)
+            return True
+        except Exception:
+            return False
+    return False
 
 def trigger_audio():
     if enable_audio:
@@ -58,7 +80,9 @@ def trigger_audio():
         } catch(e) {}
         </script>""", unsafe_allow_html=True)
 
-# --- TECHNICAL HELPERS ---
+# ========================================================
+# 3. MATHEMATICAL & TECHNICAL HELPERS
+# ========================================================
 def clean_data(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -70,7 +94,6 @@ def clean_data(df):
     df = df[req].dropna().copy()
     if len(df) < 15: return None
     
-    # Pre-calculate Indicators
     tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift(1)).abs(), (df['low'] - df['close'].shift(1)).abs()], axis=1).max(axis=1)
     df['atr'] = tr.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
     delta = df['close'].diff()
@@ -94,12 +117,17 @@ def draw_chart(df, title, lines=None):
     fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#A277FF', width=1.3), name="RSI(14)"), 2, 1)
     fig.add_hline(y=70, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
     fig.add_hline(y=30, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
-    fig.update_layout(title=title, height=520, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
+    fig.update_layout(title=title, height=500, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
     return fig
 
 # --- TOP STATUS ---
-st.markdown(f"**Terminal Time (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
-tab1, tab2, tab3 = st.tabs(["🥇 Gold (XAU/USD)", "🎯 Intraday Option Momentum", "📡 Multi-Asset Screener"])
+st.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🥇 Gold (XAU/USD)", 
+    "🎯 Intraday Option Momentum", 
+    "📡 Multi-Asset Screener", 
+    "🏛️ Goldman Sachs QIS Quant Hub"
+])
 
 # ========================================================
 # TAB 1: GOLD DASHBOARD
@@ -187,7 +215,6 @@ with tab2:
 
     data_map = fetch_tf(sym)
 
-    # Confluence Heatmap
     heat_cols = st.columns(4)
     bull_count, bear_count = 0, 0
     for idx, (tname, d) in enumerate(data_map.items()):
@@ -204,10 +231,8 @@ with tab2:
                 st.markdown(f"<div style='background:#181A20;border-left:4px solid {clr};padding:8px;'><small>{tname} Bias</small><br><b>{status}</b></div>", unsafe_allow_html=True)
 
     confluence_score = int(max(bull_count, bear_count) / 4.0 * 100)
-    if confluence_score >= 75:
-        trigger_audio()
-
-    st.markdown(f"**Confluence Score:** `{confluence_score}%` across timeframes")
+    if confluence_score >= 75: trigger_audio()
+    st.markdown(f"**Confluence Alignment:** `{confluence_score}%` across all 4 timeframes")
 
     sub_t1, sub_t2, sub_t3, sub_t4 = st.tabs(["⚡ 15-Minute", "⏰ 1-Hour", "📅 Daily", "🏛️ Monthly"])
 
@@ -230,7 +255,7 @@ with tab2:
         t2.metric("Index Level", f"{c_p:,.2f}")
         t3.metric("Recommended Strike", rec_opt)
         t4.metric("SL Level", f"{sl:,.2f}")
-        t5.metric("Position Sizing", f"{lots} Lots ({lots*lot} Qty)")
+        t5.metric("Lot Sizing", f"{lots} Lots ({lots*lot} Qty)")
 
         ladder = [(sl, '#FFAA00', 'SL')]
         for i, mult in enumerate([1.5, 2.5, 3.5, 4.5, 5.5], 1):
@@ -274,5 +299,104 @@ with tab3:
                 results.append({"Asset": name, "Ticker": ticker, "Last Price": round(cp, 2), "Signal": sig, "RSI (14)": round(rsi, 1)})
 
     if results:
-        res_df = pd.DataFrame(results)
-        st.dataframe(res_df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
+
+# ========================================================
+# TAB 4: GOLDMAN SACHS QIS QUANT HUB
+# ========================================================
+with tab4:
+    st.subheader("🏛️ Goldman Sachs Quantitative Investment Strategies (QIS) Hub")
+    st.caption("Statistical Factor Model: Normalized Momentum Z-Score, Realized Volatility Targeting & Telegram Dispatcher")
+
+    q_col1, q_col2 = st.columns([2, 1])
+    with q_col1:
+        gs_asset = st.selectbox("Select Asset for Deep Quant Analysis:", list(ASSET_SPECS.keys()), index=0)
+        gs_meta = ASSET_SPECS[gs_asset]
+    with q_col2:
+        target_vol = st.slider("Target Portfolio Volatility (%):", min_value=5.0, max_value=30.0, value=15.0, step=1.0) / 100.0
+
+    @st.cache_data(ttl=60)
+    def compute_gs_quant(sym):
+        df = clean_data(yf.download(sym, period="90d", interval="1h", progress=False))
+        if df is None or len(df) < 55: return None
+
+        df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+        df['realized_vol'] = df['log_ret'].rolling(20).std() * np.sqrt(252)
+        df['sma_20'] = df['close'].rolling(20).mean()
+        df['sma_50'] = df['close'].rolling(50).mean()
+        spread = df['sma_20'] - df['sma_50']
+        df['z_score'] = spread / (spread.rolling(50).std() + 1e-9)
+        return df
+
+    gs_df = compute_gs_quant(gs_meta["symbol"])
+
+    if gs_df is not None:
+        last = gs_df.iloc[-1]
+        p_price = float(last['close'])
+        r_vol = float(last['realized_vol'])
+        z_val = float(last['z_score'])
+        atr_val = float(last['atr'])
+
+        vol_scalar = np.clip(target_vol / max(r_vol, 0.05), 0.25, 2.0)
+        risk_dist = atr_val * 1.5
+        lot_sz = gs_meta.get("lot_size", 1)
+        calc_lots = max(1, int(((max_risk_amount / (risk_dist + 1e-6)) * vol_scalar) / lot_sz))
+
+        if z_val > 1.25 and p_price > float(last['sma_50']):
+            q_signal, q_clr = "STRONG BUY 🟢", "#00FF66"
+            sl_v = round(p_price - risk_dist, 2)
+            tp1_v = round(p_price + 1.5*risk_dist, 2)
+            tp2_v = round(p_price + 2.5*risk_dist, 2)
+        elif z_val < -1.25 and p_price < float(last['sma_50']):
+            q_signal, q_clr = "STRONG SHORT 🔴", "#FF4D4D"
+            sl_v = round(p_price + risk_dist, 2)
+            tp1_v = round(p_price - 1.5*risk_dist, 2)
+            tp2_v = round(p_price - 2.5*risk_dist, 2)
+        else:
+            q_signal, q_clr = "EQUILIBRIUM / NEUTRAL ⚪", "#888888"
+            sl_v, tp1_v, tp2_v = round(p_price - risk_dist, 2), round(p_price + risk_dist, 2), round(p_price + 2*risk_dist, 2)
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Factor Signal", q_signal)
+        m2.metric("Momentum Z-Score", f"{z_val:.2f} σ")
+        m3.metric("Realized Volatility", f"{r_vol*100:.1f}%")
+        m4.metric("Vol Multiplier", f"{vol_scalar:.2f}x")
+        m5.metric("Target Lot Allocation", f"{calc_lots} Lots")
+
+        st.markdown("---")
+        t_col1, t_col2 = st.columns([3, 1])
+        with t_col1:
+            st.info(f"**Quant Setup Summary:** Entry: `{p_price:,.2f}` | Stop-Loss: `{sl_v:,.2f}` | Target 1: `{tp1_v:,.2f}` | Target 2: `{tp2_v:,.2f}`")
+        with t_col2:
+            if st.button("📲 Send Signal to Telegram", type="primary"):
+                tg_msg = (
+                    f"⚡ *GOLDMAN SACHS QIS QUANT ALERT*\n"
+                    f"Asset: *{gs_asset}* (`{gs_meta['symbol']}`)\n"
+                    f"Signal: *{q_signal}*\n"
+                    f"Entry Price: `{p_price:,.2f}`\n"
+                    f"Stop-Loss: `{sl_v:,.2f}`\n"
+                    f"Target 1: `{tp1_v:,.2f}`\n"
+                    f"Target 2: `{tp2_v:,.2f}`\n"
+                    f"Realized Vol: `{r_vol*100:.1f}%` (Scaler: {vol_scalar:.2f}x)\n"
+                    f"Position Size: `{calc_lots} Lots`"
+                )
+                success = send_telegram(tg_msg)
+                if success:
+                    st.success("Alert successfully sent to your Telegram!")
+                else:
+                    st.error("Telegram error: Please verify your Bot Token & Chat ID in the sidebar.")
+
+        fig_gs = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.7, 0.3])
+        fig_gs.add_trace(go.Candlestick(x=gs_df.index, open=gs_df['open'], high=gs_df['high'], low=gs_df['low'], close=gs_df['close'], name="Price"), 1, 1)
+        fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['sma_20'], line=dict(color='yellow', width=1.2), name="Fast SMA (20)"), 1, 1)
+        fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['sma_50'], line=dict(color='cyan', width=1.5), name="Trend SMA (50)"), 1, 1)
+        fig_gs.add_hline(y=sl_v, line=dict(color='#FF4D4D', dash='dash'), annotation_text="Quant SL", row=1, col=1)
+        fig_gs.add_hline(y=tp1_v, line=dict(color='#00FF66', dash='dash'), annotation_text="Target 1", row=1, col=1)
+
+        fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Momentum Z-Score"), 2, 1)
+        fig_gs.add_hline(y=1.25, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
+        fig_gs.add_hline(y=-1.25, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
+        fig_gs.update_layout(title=f"Goldman Sachs Factor Model: {gs_asset}", height=550, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10))
+        st.plotly_chart(fig_gs, use_container_width=True)
+    else:
+        st.warning(f"Insufficient historical data available for {gs_asset}.")
