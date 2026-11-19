@@ -8,7 +8,7 @@ from datetime import datetime
 import pytz
 import requests
 
-st.set_page_config(page_title="Professional Quant Terminal | GS Edition", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Quant & Hedging Terminal", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
 
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
@@ -19,15 +19,11 @@ ASSET_SPECS = {
     "FIN NIFTY (NSE)": {"symbol": "NIFTY_FIN_SERVICE.NS", "strike_step": 50, "lot_size": 40, "class": "Index"},
     "MIDCP NIFTY (NSE)": {"symbol": "NIFTY_MID_SELECT.NS", "strike_step": 25, "lot_size": 50, "class": "Index"},
     "SENSEX (BSE)": {"symbol": "^BSESN", "strike_step": 100, "lot_size": 10, "class": "Index"},
-    "S&P 500 (US)": {"symbol": "^GSPC", "strike_step": 10, "lot_size": 1, "class": "Index"},
-    "COMEX Gold (GC=F)": {"symbol": "GC=F", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
-    "Spot Gold / USD": {"symbol": "XAUUSD=X", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
-    "USD / INR (NSE FX)": {"symbol": "INR=X", "strike_step": 0.25, "lot_size": 1000, "class": "Forex"},
-    "EUR / USD": {"symbol": "EURUSD=X", "strike_step": 0.005, "lot_size": 10000, "class": "Forex"},
-    "GBP / USD": {"symbol": "GBPUSD=X", "strike_step": 0.005, "lot_size": 10000, "class": "Forex"},
-    "USD / JPY": {"symbol": "JPY=X", "strike_step": 0.5, "lot_size": 10000, "class": "Forex"},
-    "US Dollar Index (DXY)": {"symbol": "DX-Y.NYB", "strike_step": 0.5, "lot_size": 1, "class": "Macro Index"},
-    "Custom Asset": {"symbol": "CUSTOM", "strike_step": 50, "lot_size": 1, "class": "Custom"}
+    "RELIANCE (NSE)": {"symbol": "RELIANCE.NS", "strike_step": 20, "lot_size": 250, "class": "Stock"},
+    "HDFC BANK (NSE)": {"symbol": "HDFCBANK.NS", "strike_step": 10, "lot_size": 550, "class": "Stock"},
+    "COMEX Gold": {"symbol": "GC=F", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
+    "USD / INR": {"symbol": "INR=X", "strike_step": 0.25, "lot_size": 1000, "class": "Forex"},
+    "EUR / USD": {"symbol": "EURUSD=X", "strike_step": 0.005, "lot_size": 10000, "class": "Forex"}
 }
 
 TF_CONFIG = {
@@ -52,7 +48,7 @@ with st.sidebar:
     st.info(f"Max Loss Allowed: **{max_risk_amount:,.2f}**")
     st.markdown("---")
     st.markdown("### 📱 Telegram Signal Bot")
-    tg_token = st.text_input("Bot Token:", type="password", placeholder="Paste Bot Token")
+    tg_token = st.text_input("Bot Token:", type="password", placeholder="Paste Token")
     tg_chat_id = st.text_input("Chat ID:", placeholder="Paste Chat ID")
 
 def send_telegram(msg):
@@ -71,8 +67,7 @@ def trigger_audio():
 def clean_cols(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
-        l0 = [str(c).lower() for c in df.columns.get_level_values(0)]
-        df.columns = df.columns.get_level_values(0 if any(k in l0 for k in ['close', 'open', 'high', 'low']) else 1)
+        df.columns = df.columns.get_level_values(0)
     df.columns = [str(c).lower() for c in df.columns]
     req = ['open', 'high', 'low', 'close', 'volume']
     if not all(c in df.columns for c in req): return None
@@ -119,33 +114,35 @@ def draw_chart(df, title, lines=None, sub_trace=None):
         fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#A277FF', width=1.3), name="RSI(14)"), 2, 1)
         fig.add_hline(y=70, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
         fig.add_hline(y=30, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
-    fig.update_layout(title=title, height=500, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
+    fig.update_layout(title=title, height=480, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
     return fig
 
 top_c1, top_c2 = st.columns([3, 1.2])
-with top_c1:
-    st.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
-with top_c2:
-    if st.button("🔄 Refresh Data & Clear Cache", type="primary", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+top_c1.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
+if top_c2.button("🔄 Refresh Data & Clear Cache", type="primary", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
 
-tab1, tab2, tab3, tab4 = st.tabs(["🥇 Gold (XAU/USD)", "🎯 Intraday Option Momentum", "📡 Multi-Asset Screener", "🏛️ Goldman Sachs QIS Quant Hub"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🥇 Gold (XAU/USD)", 
+    "🎯 Intraday Option Momentum", 
+    "📡 Multi-Asset Screener", 
+    "🏛️ Goldman Sachs QIS Quant Hub",
+    "🛡️ Hedged Spreads & Adjuster"
+])
 
 # TAB 1: GOLD
 with tab1:
     st.subheader("🥇 Gold (XAU/USD) Execution Hub")
     gc1, gc2 = st.columns([2.5, 1.5])
-    with gc1:
-        g_strat = st.radio("Gold Strategy:", ("ULTRA V1.2 (R:R Ladder)", "VWAP + 9 EMA", "125-Bar Breakout"), horizontal=True)
-    with gc2:
-        g_tf = st.selectbox("Execution Timeframe:", ["3M", "15M", "1H", "1D"], index=1, key="gtf")
+    g_strat = gc1.radio("Strategy:", ("ULTRA V1.2", "VWAP + 9 EMA", "125-Bar Breakout"), horizontal=True)
+    g_tf = gc2.selectbox("Timeframe:", ["3M", "15M", "1H", "1D"], index=1, key="gtf")
 
     gdf = load_feed("GC=F", g_tf)
     if gdf is not None and len(gdf) >= 15:
         r = gdf.iloc[-1]
         cp, atr = float(r['close']), float(r['atr'])
-        if g_strat == "ULTRA V1.2 (R:R Ladder)":
+        if g_strat == "ULTRA V1.2":
             is_sell = cp < float(r['ema_9']) < float(r['ema_21'])
             sig = "SELL 🔴" if is_sell else "BUY 🟢"
             sl = cp + atr if is_sell else cp - atr
@@ -153,11 +150,7 @@ with tab1:
             tp2 = cp - 2.5*atr if is_sell else cp + 2.5*atr
             pos_oz = max(1, int(max_risk_amount / (atr + 1e-6)))
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric(f"Signal ({g_tf})", sig)
-            c2.metric("Live Gold", f"${cp:,.2f}")
-            c3.metric("Stop Loss", f"${sl:,.2f}")
-            c4.metric("TP1 (1:1.5)", f"${tp1:,.2f}")
-            c5.metric("Position Size", f"{pos_oz} Oz")
+            c1.metric(f"Signal ({g_tf})", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("SL", f"${sl:,.2f}"); c4.metric("TP1", f"${tp1:,.2f}"); c5.metric("Size", f"{pos_oz} Oz")
             st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold ULTRA V1.2 ({g_tf})", [(sl, '#FF4D4D', 'SL'), (tp1, '#00FF66', 'TP1'), (tp2, '#00E5FF', 'TP2')]), use_container_width=True)
         elif g_strat == "VWAP + 9 EMA":
             gdf['date'] = gdf.index.date
@@ -166,15 +159,15 @@ with tab1:
             vwap, e9 = float(gdf.iloc[-1]['vwap']), float(gdf.iloc[-1]['ema_9'])
             sig = "BUY 🟢" if (cp > vwap and e9 > vwap) else ("SELL 🔴" if (cp < vwap and e9 < vwap) else "WAIT ⚪")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric(f"Signal ({g_tf})", sig); c2.metric("Live Gold", f"${cp:,.2f}"); c3.metric("VWAP", f"${vwap:,.2f}"); c4.metric("9 EMA", f"${e9:,.2f}")
-            st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold VWAP + 9 EMA ({g_tf})", [(vwap, 'orange', 'VWAP')]), use_container_width=True)
+            c1.metric("Signal", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("VWAP", f"${vwap:,.2f}"); c4.metric("EMA 9", f"${e9:,.2f}")
+            st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold VWAP + EMA ({g_tf})", [(vwap, 'orange', 'VWAP')]), use_container_width=True)
         else:
             lb_bars = 60 if g_tf in ["3M", "15M"] else 125
             gdf['h_break'] = gdf['high'].shift(1).rolling(lb_bars).max()
             h_val = float(gdf.iloc[-1]['h_break'])
             sig = "BREAKOUT BUY 🟢" if cp >= h_val else "RANGE ⚪"
             c1, c2, c3 = st.columns(3)
-            c1.metric(f"Signal ({g_tf})", sig); c2.metric("Live Gold", f"${cp:,.2f}"); c3.metric("Breakout Level", f"${h_val:,.2f}")
+            c1.metric("Signal", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("Breakout Level", f"${h_val:,.2f}")
             st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold Breakout ({g_tf})", [(h_val, 'orange', 'BO Level')]), use_container_width=True)
     else:
         st.warning(f"Data currently unavailable for Gold on {g_tf}.")
@@ -182,13 +175,10 @@ with tab1:
 # TAB 2: OPTION MOMENTUM
 with tab2:
     st.subheader("🎯 Options Strike Selection & Multi-TF Confluence (3M, 15M, 1H, 1D)")
-    colA, colB = st.columns([2, 1])
-    with colA: chosen_sym = st.selectbox("Select Target Index / Asset:", list(ASSET_SPECS.keys()))
-    with colB: custom_t = st.text_input("Custom Symbol (if chosen):", value="RELIANCE.NS")
-
-    sym = custom_t if chosen_sym == "Custom Asset" else ASSET_SPECS[chosen_sym]["symbol"]
+    chosen_sym = st.selectbox("Select Asset:", list(ASSET_SPECS.keys()))
+    sym = ASSET_SPECS[chosen_sym]["symbol"]
     step, lot = ASSET_SPECS[chosen_sym]["strike_step"], ASSET_SPECS[chosen_sym]["lot_size"]
-    data_map = {"3M": load_feed(sym, "3M"), "15M": load_feed(sym, "15M"), "1H": load_feed(sym, "1H"), "1D": load_feed(sym, "1D")}
+    data_map = {tf: load_feed(sym, tf) for tf in ["3M", "15M", "1H", "1D"]}
 
     heat_cols = st.columns(4)
     bull_count, bear_count = 0, 0
@@ -200,83 +190,60 @@ with tab2:
                 if c_p >= e9 >= e21: status, clr = "BULLISH 🟢", "#00FF66"; bull_count += 1
                 elif c_p < e9 < e21: status, clr = "BEARISH 🔴", "#FF4D4D"; bear_count += 1
                 else: status, clr = "NEUTRAL ⚪", "#888888"
-                st.markdown(f"<div style='background:#181A20;border-left:4px solid {clr};padding:8px;'><small>{tname} Alignment</small><br><b>{status}</b></div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div style='background:#181A20;padding:8px;'><small>{tname}</small><br><b>NO DATA</b></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background:#181A20;border-left:4px solid {clr};padding:8px;'><small>{tname}</small><br><b>{status}</b></div>", unsafe_allow_html=True)
 
     confluence_score = int(max(bull_count, bear_count) / 4.0 * 100)
     if confluence_score >= 75: trigger_audio()
-    st.markdown(f"**Confluence Alignment:** `{confluence_score}%` across all 4 timeframes (3M, 15M, 1H, 1D)")
+    st.markdown(f"**Confluence Alignment:** `{confluence_score}%` across all 4 timeframes")
 
-    sub_t1, sub_t2, sub_t3, sub_t4 = st.tabs(["⚡ 3-Minute", "⚡ 15-Minute", "⏰ 1-Hour", "📅 Daily"])
+    sub_tabs = st.tabs(["⚡ 3-Minute", "⚡ 15-Minute", "⏰ 1-Hour", "📅 Daily"])
+    for idx, (tf_key, sub_t) in enumerate(zip(["3M", "15M", "1H", "1D"], sub_tabs)):
+        with sub_t:
+            df = data_map[tf_key]
+            if df is not None:
+                r = df.iloc[-1]
+                c_p, atr = float(r['close']), float(r['atr'])
+                is_bull = float(r['close']) >= float(r['ema_9']) >= float(r['ema_21'])
+                is_bear = float(r['close']) < float(r['ema_9']) < float(r['ema_21'])
+                atm_strike = int(round(c_p / step) * step) if step >= 1 else round(c_p, 4)
+                rec_opt = f"{atm_strike} CE" if is_bull else (f"{atm_strike} PE" if is_bear else "NO TRADE")
+                sig_lbl = "CALL BUY 🟢" if is_bull else ("PUT BUY 🔴" if is_bear else "NEUTRAL ⚪")
+                sl = c_p - atr if is_bull else c_p + atr
+                lots = max(1, int(max_risk_amount / (atr * lot))) if (is_bull or is_bear) else 0
 
-    def display_option_engine(df, name):
-        if df is None: st.warning(f"Data not available for {name}"); return
-        r = df.iloc[-1]
-        c_p, atr = float(r['close']), float(r['atr'])
-        is_bull = float(r['close']) >= float(r['ema_9']) >= float(r['ema_21'])
-        is_bear = float(r['close']) < float(r['ema_9']) < float(r['ema_21'])
-        atm_strike = int(round(c_p / step) * step) if step >= 1 else round(c_p, 4)
-        rec_opt = f"{atm_strike} CE" if is_bull else (f"{atm_strike} PE" if is_bear else "NO TRADE")
-        sig_lbl = "CALL BUY 🟢" if is_bull else ("PUT BUY 🔴" if is_bear else "NEUTRAL ⚪")
-        sl = c_p - atr if is_bull else c_p + atr
-        lots = max(1, int(max_risk_amount / (atr * lot))) if (is_bull or is_bear) else 0
-
-        t1, t2, t3, t4, t5 = st.columns(5)
-        t1.metric("Signal", sig_lbl); t2.metric("Asset Level", f"{c_p:,.4f}" if c_p < 500 else f"{c_p:,.2f}")
-        t3.metric("Recommended Strike", str(rec_opt)); t4.metric("SL Level", f"{sl:,.4f}" if sl < 500 else f"{sl:,.2f}")
-        t5.metric("Lot Sizing", f"{lots} Lots ({lots*lot} Units)")
-        ladder = [(sl, '#FFAA00', 'SL')] + [(c_p + m*atr if is_bull else c_p - m*atr, '#00FF66' if is_bull else '#FF4D4D', f"T{i}") for i, m in enumerate([1.5, 2.5, 3.5, 4.5, 5.5], 1)]
-        st.plotly_chart(draw_chart(df.iloc[-90:], f"{chosen_sym} - {name}", ladder), use_container_width=True)
-
-    with sub_t1: display_option_engine(data_map["3M"], "3-Minute Scalp")
-    with sub_t2: display_option_engine(data_map["15M"], "15-Minute Execution")
-    with sub_t3: display_option_engine(data_map["1H"], "1-Hour Swing")
-    with sub_t4: display_option_engine(data_map["1D"], "Daily Trend")
+                t1, t2, t3, t4, t5 = st.columns(5)
+                t1.metric("Signal", sig_lbl); t2.metric("Asset Price", f"{c_p:,.2f}"); t3.metric("Strike", str(rec_opt)); t4.metric("SL", f"{sl:,.2f}"); t5.metric("Lots", f"{lots}")
+                ladder = [(sl, '#FFAA00', 'SL')] + [(c_p + m*atr if is_bull else c_p - m*atr, '#00FF66' if is_bull else '#FF4D4D', f"T{i}") for i, m in enumerate([1.5, 2.5, 3.5], 1)]
+                st.plotly_chart(draw_chart(df.iloc[-90:], f"{chosen_sym} ({tf_key})", ladder), use_container_width=True)
 
 # TAB 3: SCREENER
 with tab3:
-    st.subheader("📡 Real-Time Multi-Asset Scanner (With Timeframe Engine)")
-    sc1, sc2, sc3 = st.columns([1.5, 1.5, 3])
-    with sc1: scanner_tf = st.selectbox("Select Scanner Timeframe:", ["3M", "15M", "1H", "1D"], index=1)
-    with sc2:
-        st.write(""); st.button("🔎 Run Live Scanner", type="primary", use_container_width=True)
-    with sc3: st.caption(f"Scanning market tickers across the **{scanner_tf}** timeframe.")
-
-    scan_list = [("NIFTY 50", "^NSEI"), ("BANK NIFTY", "^NSEBANK"), ("FIN NIFTY", "NIFTY_FIN_SERVICE.NS"), ("COMEX GOLD", "GC=F"), ("USD / INR", "INR=X"), ("EUR / USD", "EURUSD=X"), ("GBP / USD", "GBPUSD=X"), ("US DOLLAR INDEX", "DX-Y.NYB")]
+    st.subheader("📡 Real-Time Multi-Asset Scanner")
+    scanner_tf = st.selectbox("Select Timeframe:", ["3M", "15M", "1H", "1D"], index=1)
+    scan_list = [("NIFTY 50", "^NSEI"), ("BANK NIFTY", "^NSEBANK"), ("FIN NIFTY", "NIFTY_FIN_SERVICE.NS"), ("RELIANCE", "RELIANCE.NS"), ("HDFC BANK", "HDFCBANK.NS"), ("COMEX GOLD", "GC=F"), ("USD / INR", "INR=X"), ("EUR / USD", "EURUSD=X")]
     results = []
-    with st.spinner(f"Scanning market tickers on {scanner_tf}..."):
+    with st.spinner(f"Scanning tickers on {scanner_tf}..."):
         for name, ticker in scan_list:
             df = load_feed(ticker, scanner_tf)
             if df is not None:
                 lr = df.iloc[-1]
                 cp, e9, e21, rsi = float(lr['close']), float(lr['ema_9']), float(lr['ema_21']), float(lr['rsi'])
                 sig = "BULLISH BREAKOUT 🟢" if (cp >= e9 >= e21) else ("BEARISH BREAKDOWN 🔴" if (cp < e9 < e21) else "CONSOLIDATION ⚪")
-                results.append({"Asset": name, "Timeframe": scanner_tf, "Last Price": round(cp, 4) if cp < 500 else round(cp, 2), "Signal": sig, "RSI (14)": round(rsi, 1)})
+                results.append({"Asset": name, "Timeframe": scanner_tf, "Price": round(cp, 4) if cp < 500 else round(cp, 2), "Signal": sig, "RSI (14)": round(rsi, 1)})
     if results:
         st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
 
-# TAB 4: GOLDMAN SACHS QIS QUANT HUB
+# TAB 4: GOLDMAN SACHS QUANT HUB
 with tab4:
-    st.subheader("🏛️ Goldman Sachs Quantitative Investment Strategies (QIS) Hub")
-    st.caption("Institutional Factor Model: Z-Score Momentum & Volatility Targeting")
+    st.subheader("🏛️ Goldman Sachs QIS Factor Model")
+    f1, f2, f3 = st.columns([1.5, 1.0, 1.0])
+    gs_asset = f1.selectbox("Asset:", list(ASSET_SPECS.keys()), index=0)
+    gs_meta = ASSET_SPECS[gs_asset]
+    gs_tf = f2.selectbox("Factor Timeframe:", ["3M", "15M", "1H", "1D"], index=2)
+    z_threshold = f3.selectbox("Sensitivity:", [1.0, 1.25, 1.5], index=0, format_func=lambda x: f"±{x}σ")
+    target_vol = st.slider("Target Volatility (%):", 5.0, 30.0, 12.0, 1.0) / 100.0
 
-    f1, f2, f3, f4 = st.columns([1.5, 1.5, 1.0, 1.0])
-    with f1: cat_filter = st.radio("Asset Class Filter:", ("All Assets", "Commodities (Gold)", "Currencies / Forex", "Indices"), horizontal=True)
-    with f2:
-        def filter_assets(c):
-            if c == "Commodities (Gold)": return [k for k, v in ASSET_SPECS.items() if v.get("class") == "Commodity"]
-            if c == "Currencies / Forex": return [k for k, v in ASSET_SPECS.items() if v.get("class") in ["Forex", "Macro Index"]]
-            if c == "Indices": return [k for k, v in ASSET_SPECS.items() if v.get("class") == "Index"]
-            return list(ASSET_SPECS.keys())
-        gs_asset = st.selectbox("Asset for Analysis:", filter_assets(cat_filter), index=0)
-        gs_meta = ASSET_SPECS[gs_asset]
-    with f3: gs_tf = st.selectbox("Factor Timeframe:", ["3M", "15M", "1H", "1D"], index=2)
-    with f4: z_threshold = st.selectbox("Z-Score Sensitivity:", [1.0, 1.25, 1.5], index=0, format_func=lambda x: f"±{x}σ")
-
-    target_vol = st.slider("Target Portfolio Volatility (%):", min_value=5.0, max_value=30.0, value=12.0, step=1.0) / 100.0
     gs_df = load_feed(gs_meta["symbol"], gs_tf)
-
     if gs_df is not None and len(gs_df) >= 30:
         gs_df['log_ret'] = np.log(gs_df['close'] / gs_df['close'].shift(1))
         ann_mult = 252 * (78 if gs_tf == "3M" else 26 if gs_tf == "15M" else 7 if gs_tf == "1H" else 1)
@@ -287,11 +254,7 @@ with tab4:
         gs_df['z_score'] = spread / (spread.rolling(50).std() + 1e-9)
 
         last = gs_df.iloc[-1]
-        p_price = float(last['close'])
-        r_vol = float(last['realized_vol']) if not np.isnan(last['realized_vol']) else 0.15
-        z_val = float(last['z_score']) if not np.isnan(last['z_score']) else 0.0
-        atr_val = float(last['atr'])
-
+        p_price, r_vol, z_val, atr_val = float(last['close']), float(last['realized_vol']), float(last['z_score']), float(last['atr'])
         vol_scalar = np.clip(target_vol / max(r_vol, 0.04), 0.25, 2.5)
         risk_dist = atr_val * 1.5
         lot_sz = gs_meta.get("lot_size", 1)
@@ -299,44 +262,82 @@ with tab4:
 
         if z_val >= z_threshold and p_price >= float(last['sma_50']):
             q_signal, q_clr = "STRONG BUY 🟢", "#00FF66"
-            sl_v = round(p_price - risk_dist, 4) if p_price < 500 else round(p_price - risk_dist, 2)
-            tp1_v = round(p_price + 1.5*risk_dist, 4) if p_price < 500 else round(p_price + 1.5*risk_dist, 2)
-            tp2_v = round(p_price + 2.5*risk_dist, 4) if p_price < 500 else round(p_price + 2.5*risk_dist, 2)
+            sl_v = round(p_price - risk_dist, 2)
+            tp1_v = round(p_price + 1.5*risk_dist, 2)
+            tp2_v = round(p_price + 2.5*risk_dist, 2)
         elif z_val <= -z_threshold and p_price <= float(last['sma_50']):
             q_signal, q_clr = "STRONG SHORT 🔴", "#FF4D4D"
-            sl_v = round(p_price + risk_dist, 4) if p_price < 500 else round(p_price + risk_dist, 2)
-            tp1_v = round(p_price - 1.5*risk_dist, 4) if p_price < 500 else round(p_price - 1.5*risk_dist, 2)
-            tp2_v = round(p_price - 2.5*risk_dist, 4) if p_price < 500 else round(p_price - 2.5*risk_dist, 2)
+            sl_v = round(p_price + risk_dist, 2)
+            tp1_v = round(p_price - 1.5*risk_dist, 2)
+            tp2_v = round(p_price - 2.5*risk_dist, 2)
         else:
-            q_signal, q_clr = "EQUILIBRIUM / NEUTRAL ⚪", "#888888"
-            sl_v = round(p_price - risk_dist, 4) if p_price < 500 else round(p_price - risk_dist, 2)
-            tp1_v = round(p_price + risk_dist, 4) if p_price < 500 else round(p_price + risk_dist, 2)
-            tp2_v = round(p_price + 2*risk_dist, 4) if p_price < 500 else round(p_price + 2*risk_dist, 2)
+            q_signal, q_clr = "EQUILIBRIUM ⚪", "#888888"
+            sl_v, tp1_v, tp2_v = round(p_price - risk_dist, 2), round(p_price + risk_dist, 2), round(p_price + 2*risk_dist, 2)
 
-        p_str = f"{p_price:,.4f}" if p_price < 500 else f"${p_price:,.2f}" if "Gold" in gs_asset else f"{p_price:,.2f}"
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Quant Factor Signal", q_signal)
-        m2.metric(f"Asset Price ({gs_tf})", p_str)
-        m3.metric("Momentum Z-Score", f"{z_val:.2f} σ")
-        m4.metric("Realized Volatility", f"{r_vol*100:.1f}%")
-        m5.metric("Target Lot Allocation", f"{calc_lots} Lots ({calc_lots * lot_sz} Units)")
+        m1.metric("Signal", q_signal); m2.metric("Price", f"{p_price:,.2f}"); m3.metric("Z-Score", f"{z_val:.2f} σ"); m4.metric("Vol", f"{r_vol*100:.1f}%"); m5.metric("Lots", f"{calc_lots}")
+        
+        if st.button("📲 Send Signal to Telegram", type="primary"):
+            tg_msg = f"⚡ *GS QUANT ALERT*\nAsset: *{gs_asset}*\nTimeframe: *{gs_tf}*\nSignal: *{q_signal}*\nPrice: `{p_price}`\nSL: `{sl_v}`\nTP: `{tp1_v}`\nLots: `{calc_lots}`"
+            st.success("Alert Sent!") if send_telegram(tg_msg) else st.error("Telegram Failed. Check Credentials.")
+
+        gs_lines = [(sl_v, '#FF4D4D', 'SL'), (tp1_v, '#00FF66', 'TP1')]
+        z_trace = (go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Z-Score"), [(z_threshold, '#00FF66'), (-z_threshold, '#FF4D4D')])
+        st.plotly_chart(draw_chart(gs_df.iloc[-90:], f"Goldman Sachs Factor Engine: {gs_asset} ({gs_tf})", gs_lines, sub_trace=z_trace), use_container_width=True)
+
+# TAB 5: HEDGED SPREADS & DAILY ADJUSTER
+with tab5:
+    st.subheader("🛡️ Hedged Spreads & Daily Adjustment Engine")
+    st.caption("Institutional 2-Leg Risk Mitigation & Systematic Trade Repair Protocols")
+
+    h_asset = st.selectbox("Select Asset for Hedged Spread:", ["NIFTY 50 (NSE)", "BANK NIFTY (NSE)", "RELIANCE (NSE)", "HDFC BANK (NSE)"])
+    h_meta = ASSET_SPECS[h_asset]
+    h_df = load_feed(h_meta["symbol"], "1D")
+
+    if h_df is not None and len(h_df) >= 20:
+        h_last = h_df.iloc[-1]
+        h_price = float(h_last['close'])
+        h_atr = float(h_last['atr'])
+        h_step = h_meta["strike_step"]
+        h_lot = h_meta["lot_size"]
+
+        is_bull_spread = float(h_last['ema_9']) >= float(h_last['ema_21'])
+        atm = int(round(h_price / h_step) * h_step)
+
+        if is_bull_spread:
+            strat_name = "Bull Call Spread (Hedged Upside)"
+            leg1 = f"BUY {atm} CE"
+            leg2 = f"SELL {atm + (2 * h_step)} CE (Hedge Leg)"
+            width = 2 * h_step
+            approx_net_debit = width * 0.40
+            max_loss_spread = approx_net_debit * h_lot
+            max_profit_spread = (width - approx_net_debit) * h_lot
+            adjust_rule = f"If price drops below {round(h_price - h_atr, 2)}, roll the sold {atm + (2*h_step)} CE down to {atm + h_step} CE to collect additional credit and reduce max loss."
+        else:
+            strat_name = "Bear Put Spread (Hedged Downside)"
+            leg1 = f"BUY {atm} PE"
+            leg2 = f"SELL {atm - (2 * h_step)} PE (Hedge Leg)"
+            width = 2 * h_step
+            approx_net_debit = width * 0.40
+            max_loss_spread = approx_net_debit * h_lot
+            max_profit_spread = (width - approx_net_debit) * h_lot
+            adjust_rule = f"If price rises above {round(h_price + h_atr, 2)}, roll the sold {atm - (2*h_step)} PE up to {atm - h_step} PE to collect additional credit and protect capital."
+
+        st.markdown(f"### Recommended Strategy: **{strat_name}**")
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.info(f"**Leg 1 (Main Direction):**\n### {leg1}")
+        sc2.success(f"**Leg 2 (Insurance Hedge):**\n### {leg2}")
+        sc3.warning(f"**Net Margin Benefit:**\n### ~65% Margin Discount Applied")
+
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Max Capped Loss", f"₹{max_loss_spread:,.2f}")
+        p2.metric("Max Capped Profit", f"₹{max_profit_spread:,.2f}")
+        p3.metric("Reward-to-Risk", f"1 : {max_profit_spread / max_loss_spread:.2f}")
 
         st.markdown("---")
-        t_col1, t_col2 = st.columns([3, 1])
-        with t_col1:
-            st.info(f"**Quant Setup ({gs_meta.get('class')} | {gs_tf}):** Signal: `{q_signal}` | Entry: `{p_str}` | SL: `{sl_v}` | Target 1: `{tp1_v}` | Target 2: `{tp2_v}`")
-        with t_col2:
-            if st.button("📲 Send Signal to Telegram", type="primary"):
-                tg_msg = f"⚡ *GOLDMAN SACHS QIS QUANT ALERT*\nAsset: *{gs_asset}* (`{gs_meta['symbol']}`)\nTimeframe: *{gs_tf}*\nSignal: *{q_signal}*\nEntry Price: `{p_str}`\nStop-Loss: `{sl_v}`\nTarget 1: `{tp1_v}`\nTarget 2: `{tp2_v}`\nRealized Vol: `{r_vol*100:.1f}%` (Scaler: {vol_scalar:.2f}x)\nQuant Allocation: `{calc_lots} Lots` ({calc_lots * lot_sz} Units)"
-                if send_telegram(tg_msg):
-                    st.success("Alert sent to your Telegram!")
-                else:
-                    st.error("Telegram error: Verify Bot Token & Chat ID in sidebar.")
-
-        gs_lines = [(sl_v, '#FF4D4D', 'Quant SL'), (tp1_v, '#00FF66', 'Target 1'), (tp2_v, '#00E5FF', 'Target 2')]
-        z_trace = (go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Z-Score"), [(z_threshold, '#00FF66'), (-z_threshold, '#FF4D4D')])
-        st.plotly_chart(draw_chart(gs_df.iloc[-90:], f"Goldman Sachs Factor Engine: {gs_asset} ({gs_tf}) | Active: {q_signal}", gs_lines, sub_trace=z_trace), use_container_width=True)
-    else:
-        st.warning(f"Insufficient data for {gs_asset} on {gs_tf}.")
+        st.markdown("### 🛠️ Daily Systematic Trade Adjustment Rules")
+        st.write(f"1. **Entry Protocol:** Always buy **{leg1}** first, then sell **{leg2}** within 30 seconds to lock in exchange margin benefits.")
+        st.write(f"2. **Daily Price Adjustment Protocol:** {adjust_rule}")
+        st.write("3. **Profit Harvest Rule:** If the spread reaches 60% of maximum profit before expiry, exit both legs completely.")
 
 # --- apy.py complete ---
