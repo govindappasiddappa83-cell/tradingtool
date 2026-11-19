@@ -6,9 +6,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 import pytz
-import requests
 
-st.set_page_config(page_title="Quant & Hedging Terminal", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Quant & Asymmetric Hedging Terminal", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
 
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
@@ -46,19 +45,6 @@ with st.sidebar:
     risk_pct = st.slider("Risk Per Trade (%):", min_value=0.25, max_value=5.0, value=1.0, step=0.25)
     max_risk_amount = (account_capital * risk_pct) / 100.0
     st.info(f"Max Loss Allowed: **{max_risk_amount:,.2f}**")
-    st.markdown("---")
-    st.markdown("### 📱 Telegram Signal Bot")
-    tg_token = st.text_input("Bot Token:", type="password", placeholder="Paste Token")
-    tg_chat_id = st.text_input("Chat ID:", placeholder="Paste Chat ID")
-
-def send_telegram(msg):
-    if tg_token and tg_chat_id:
-        try:
-            requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", json={"chat_id": tg_chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=8)
-            return True
-        except Exception:
-            return False
-    return False
 
 def trigger_audio():
     if enable_audio:
@@ -97,7 +83,7 @@ def load_feed(symbol, tf_key):
     return compute_indicators(df)
 
 def draw_chart(df, title, lines=None, sub_trace=None):
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.77, 0.23])
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.75, 0.25])
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price"), 1, 1)
     fig.add_trace(go.Scatter(x=df.index, y=df['ema_9'], line=dict(color='cyan', width=1.2), name="EMA 9"), 1, 1)
     fig.add_trace(go.Scatter(x=df.index, y=df['ema_21'], line=dict(color='magenta', width=1.2), name="EMA 21"), 1, 1)
@@ -114,9 +100,10 @@ def draw_chart(df, title, lines=None, sub_trace=None):
         fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#A277FF', width=1.3), name="RSI(14)"), 2, 1)
         fig.add_hline(y=70, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
         fig.add_hline(y=30, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
-    fig.update_layout(title=title, height=480, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
+    fig.update_layout(title=title, height=450, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
     return fig
 
+# HEADER
 top_c1, top_c2 = st.columns([3, 1.2])
 top_c1.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
 if top_c2.button("🔄 Refresh Data & Clear Cache", type="primary", use_container_width=True):
@@ -128,7 +115,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🎯 Intraday Option Momentum", 
     "📡 Multi-Asset Screener", 
     "🏛️ Goldman Sachs QIS Quant Hub",
-    "🛡️ Hedged Spreads & Adjuster"
+    "🚀 Asymmetric Unlimited Profit Hedging"
 ])
 
 # TAB 1: GOLD
@@ -146,8 +133,7 @@ with tab1:
             is_sell = cp < float(r['ema_9']) < float(r['ema_21'])
             sig = "SELL 🔴" if is_sell else "BUY 🟢"
             sl = cp + atr if is_sell else cp - atr
-            tp1 = cp - 1.5*atr if is_sell else cp + 1.5*atr
-            tp2 = cp - 2.5*atr if is_sell else cp + 2.5*atr
+            tp1, tp2 = (cp - 1.5*atr, cp - 2.5*atr) if is_sell else (cp + 1.5*atr, cp + 2.5*atr)
             pos_oz = max(1, int(max_risk_amount / (atr + 1e-6)))
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric(f"Signal ({g_tf})", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("SL", f"${sl:,.2f}"); c4.metric("TP1", f"${tp1:,.2f}"); c5.metric("Size", f"{pos_oz} Oz")
@@ -261,83 +247,83 @@ with tab4:
         calc_lots = max(1, int(((max_risk_amount / (risk_dist + 1e-6)) * vol_scalar) / lot_sz))
 
         if z_val >= z_threshold and p_price >= float(last['sma_50']):
-            q_signal, q_clr = "STRONG BUY 🟢", "#00FF66"
-            sl_v = round(p_price - risk_dist, 2)
-            tp1_v = round(p_price + 1.5*risk_dist, 2)
-            tp2_v = round(p_price + 2.5*risk_dist, 2)
+            q_signal = "STRONG BUY 🟢"
+            sl_v, tp1_v = round(p_price - risk_dist, 2), round(p_price + 1.5*risk_dist, 2)
         elif z_val <= -z_threshold and p_price <= float(last['sma_50']):
-            q_signal, q_clr = "STRONG SHORT 🔴", "#FF4D4D"
-            sl_v = round(p_price + risk_dist, 2)
-            tp1_v = round(p_price - 1.5*risk_dist, 2)
-            tp2_v = round(p_price - 2.5*risk_dist, 2)
+            q_signal = "STRONG SHORT 🔴"
+            sl_v, tp1_v = round(p_price + risk_dist, 2), round(p_price - 1.5*risk_dist, 2)
         else:
-            q_signal, q_clr = "EQUILIBRIUM ⚪", "#888888"
-            sl_v, tp1_v, tp2_v = round(p_price - risk_dist, 2), round(p_price + risk_dist, 2), round(p_price + 2*risk_dist, 2)
+            q_signal = "EQUILIBRIUM ⚪"
+            sl_v, tp1_v = round(p_price - risk_dist, 2), round(p_price + risk_dist, 2)
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Signal", q_signal); m2.metric("Price", f"{p_price:,.2f}"); m3.metric("Z-Score", f"{z_val:.2f} σ"); m4.metric("Vol", f"{r_vol*100:.1f}%"); m5.metric("Lots", f"{calc_lots}")
-        
-        if st.button("📲 Send Signal to Telegram", type="primary"):
-            tg_msg = f"⚡ *GS QUANT ALERT*\nAsset: *{gs_asset}*\nTimeframe: *{gs_tf}*\nSignal: *{q_signal}*\nPrice: `{p_price}`\nSL: `{sl_v}`\nTP: `{tp1_v}`\nLots: `{calc_lots}`"
-            st.success("Alert Sent!") if send_telegram(tg_msg) else st.error("Telegram Failed. Check Credentials.")
 
         gs_lines = [(sl_v, '#FF4D4D', 'SL'), (tp1_v, '#00FF66', 'TP1')]
         z_trace = (go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Z-Score"), [(z_threshold, '#00FF66'), (-z_threshold, '#FF4D4D')])
         st.plotly_chart(draw_chart(gs_df.iloc[-90:], f"Goldman Sachs Factor Engine: {gs_asset} ({gs_tf})", gs_lines, sub_trace=z_trace), use_container_width=True)
 
-# TAB 5: HEDGED SPREADS & DAILY ADJUSTER
+# TAB 5: ASYMMETRIC UNLIMITED PROFIT HEDGING
 with tab5:
-    st.subheader("🛡️ Hedged Spreads & Daily Adjustment Engine")
-    st.caption("Institutional 2-Leg Risk Mitigation & Systematic Trade Repair Protocols")
+    st.subheader("🚀 Asymmetric Unlimited Profit Hedging & Daily Adjuster")
+    st.caption("Ratio Volatility Backspread: Capped Downside with 100% Unlimited Open-Ended Profit")
 
-    h_asset = st.selectbox("Select Asset for Hedged Spread:", ["NIFTY 50 (NSE)", "BANK NIFTY (NSE)", "RELIANCE (NSE)", "HDFC BANK (NSE)"])
+    h_asset = st.selectbox("Select Asset to Trade:", ["NIFTY 50 (NSE)", "BANK NIFTY (NSE)", "RELIANCE (NSE)", "HDFC BANK (NSE)"])
     h_meta = ASSET_SPECS[h_asset]
     h_df = load_feed(h_meta["symbol"], "1D")
 
     if h_df is not None and len(h_df) >= 20:
         h_last = h_df.iloc[-1]
-        h_price = float(h_last['close'])
-        h_atr = float(h_last['atr'])
-        h_step = h_meta["strike_step"]
-        h_lot = h_meta["lot_size"]
-
-        is_bull_spread = float(h_last['ema_9']) >= float(h_last['ema_21'])
+        h_price, h_step, h_lot = float(h_last['close']), h_meta["strike_step"], h_meta["lot_size"]
+        is_bullish = float(h_last['ema_9']) >= float(h_last['ema_21'])
         atm = int(round(h_price / h_step) * h_step)
 
-        if is_bull_spread:
-            strat_name = "Bull Call Spread (Hedged Upside)"
-            leg1 = f"BUY {atm} CE"
-            leg2 = f"SELL {atm + (2 * h_step)} CE (Hedge Leg)"
-            width = 2 * h_step
-            approx_net_debit = width * 0.40
-            max_loss_spread = approx_net_debit * h_lot
-            max_profit_spread = (width - approx_net_debit) * h_lot
-            adjust_rule = f"If price drops below {round(h_price - h_atr, 2)}, roll the sold {atm + (2*h_step)} CE down to {atm + h_step} CE to collect additional credit and reduce max loss."
+        if is_bullish:
+            strat_title = "Call Ratio Backspread (Capped Loss + Unlimited Upside)"
+            short_strike, long_strike = atm, atm + (2 * h_step)
+            leg1 = f"SELL 1x {short_strike} CE (Financer)"
+            leg2 = f"BUY 2x {long_strike} CE (Unlimited Engine)"
+            p_short, p_long = round(h_step * 1.8, 1), round(h_step * 0.9, 1)
+            net_debit = (2 * p_long) - p_short
+            max_loss_rupees = ((long_strike - short_strike) + net_debit) * h_lot
+            breakeven = long_strike + ((long_strike - short_strike) + net_debit)
+            px_range = np.linspace(short_strike - (3 * h_step), long_strike + (6 * h_step), 50)
+            payoffs = [(-max(0, p - short_strike) + p_short + 2 * (max(0, p - long_strike) - p_long)) * h_lot for p in px_range]
+            adjust_advice = f"If price rallies above {long_strike:,.0f}, profit accelerates into UNLIMITED territory. If market crashes, your loss is capped at ₹{abs(net_debit * h_lot):,.2f}."
         else:
-            strat_name = "Bear Put Spread (Hedged Downside)"
-            leg1 = f"BUY {atm} PE"
-            leg2 = f"SELL {atm - (2 * h_step)} PE (Hedge Leg)"
-            width = 2 * h_step
-            approx_net_debit = width * 0.40
-            max_loss_spread = approx_net_debit * h_lot
-            max_profit_spread = (width - approx_net_debit) * h_lot
-            adjust_rule = f"If price rises above {round(h_price + h_atr, 2)}, roll the sold {atm - (2*h_step)} PE up to {atm - h_step} PE to collect additional credit and protect capital."
+            strat_title = "Put Ratio Backspread (Capped Loss + Unlimited Downside)"
+            short_strike, long_strike = atm, atm - (2 * h_step)
+            leg1 = f"SELL 1x {short_strike} PE (Financer)"
+            leg2 = f"BUY 2x {long_strike} PE (Unlimited Engine)"
+            p_short, p_long = round(h_step * 1.8, 1), round(h_step * 0.9, 1)
+            net_debit = (2 * p_long) - p_short
+            max_loss_rupees = ((short_strike - long_strike) + net_debit) * h_lot
+            breakeven = long_strike - ((short_strike - long_strike) + net_debit)
+            px_range = np.linspace(long_strike - (6 * h_step), short_strike + (3 * h_step), 50)
+            payoffs = [(-max(0, short_strike - p) + p_short + 2 * (max(0, long_strike - p) - p_long)) * h_lot for p in px_range]
+            adjust_advice = f"If price drops below {long_strike:,.0f}, profit accelerates into UNLIMITED territory. If market rallies, your loss is capped at ₹{abs(net_debit * h_lot):,.2f}."
 
-        st.markdown(f"### Recommended Strategy: **{strat_name}**")
-        sc1, sc2, sc3 = st.columns(3)
-        sc1.info(f"**Leg 1 (Main Direction):**\n### {leg1}")
-        sc2.success(f"**Leg 2 (Insurance Hedge):**\n### {leg2}")
-        sc3.warning(f"**Net Margin Benefit:**\n### ~65% Margin Discount Applied")
+        st.markdown(f"### Strategy: **{strat_title}**")
+        b1, b2, b3 = st.columns(3)
+        b1.info(f"**Leg 1:** {leg1}")
+        b2.success(f"**Leg 2:** {leg2}")
+        b3.warning(f"**Upside Model:** 🚀 UNLIMITED")
 
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Max Capped Loss", f"₹{max_loss_spread:,.2f}")
-        p2.metric("Max Capped Profit", f"₹{max_profit_spread:,.2f}")
-        p3.metric("Reward-to-Risk", f"1 : {max_profit_spread / max_loss_spread:.2f}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Max Capped Loss", f"₹{max_loss_rupees:,.2f}")
+        m2.metric("Max Profit", "UNLIMITED 🚀")
+        m3.metric("Crash Risk Buffer", f"Capped at ₹{abs(net_debit * h_lot):,.2f}")
 
-        st.markdown("---")
-        st.markdown("### 🛠️ Daily Systematic Trade Adjustment Rules")
-        st.write(f"1. **Entry Protocol:** Always buy **{leg1}** first, then sell **{leg2}** within 30 seconds to lock in exchange margin benefits.")
-        st.write(f"2. **Daily Price Adjustment Protocol:** {adjust_rule}")
-        st.write("3. **Profit Harvest Rule:** If the spread reaches 60% of maximum profit before expiry, exit both legs completely.")
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(x=px_range, y=payoffs, mode='lines', line=dict(color='#00FF66', width=2.5), name="Payoff (₹)"))
+        fig_p.add_hline(y=0, line=dict(color='#888888', dash='dot'))
+        fig_p.add_vline(x=h_price, line=dict(color='#00E5FF', dash='dash'), annotation_text="Spot")
+        fig_p.update_layout(title="Asymmetric Payoff Curve", height=350, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
+        st.plotly_chart(fig_p, use_container_width=True)
+
+        st.markdown("### 🛠️ Daily Trade Adjustment Protocol")
+        st.write(f"1. **Execution Rule:** Enter both legs simultaneously on expiry week (Wednesday/Thursday for Nifty/Bank Nifty).")
+        st.write(f"2. **Daily Action:** {adjust_advice}")
+        st.write(f"3. **Breakeven Line:** Once price crosses **{breakeven:,.1f}**, trail with a trailing stop loss on Spot Price.")
 
 # --- apy.py complete ---
