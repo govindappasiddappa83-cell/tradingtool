@@ -250,13 +250,16 @@ with tab4:
         m1.metric("Quant Signal", q_sig); m2.metric("Price", f"{p:,.2f}"); m3.metric("Z-Score", f"{z:.2f} σ"); m4.metric("Realized Vol", f"{vol*100:.1f}%")
         st.plotly_chart(draw_chart(gs_df.iloc[-90:], f"Goldman Sachs Engine: {gs_asset} ({gs_tf})"), use_container_width=True)
 
-# TAB 5: HEDGING
+# TAB 5: ASYMMETRIC UNLIMITED PROFIT HEDGING & LIVE ADJUSTER
 with tab5:
-    st.subheader("🚀 Asymmetric Unlimited Profit Hedging")
-    h_asset = st.selectbox("Select Asset to Trade:", ["NIFTY 50", "BANK NIFTY", "RELIANCE", "HDFC BANK"])
+    st.subheader("🚀 Asymmetric Unlimited Profit Hedging & Live Adjustment Engine")
+    st.caption("Ratio Volatility Backspread: Capped Downside Risk with Dynamic Profit-Harvest & Systematic Adjustment Alerts.")
+
+    h_asset = st.selectbox("Select Asset to Trade:", ["NIFTY 50", "BANK NIFTY", "FIN NIFTY", "RELIANCE", "HDFC BANK"])
     h_meta = ASSET_SPECS[h_asset]
     hdf = load_feed(h_meta["symbol"], "1D")
-    if hdf is not None:
+
+    if hdf is not None and len(hdf) >= 20:
         hp = float(hdf.iloc[-1]['close'])
         step, lot = h_meta["step"], h_meta["lot"]
         atm = int(round(hp / step) * step)
@@ -264,11 +267,70 @@ with tab5:
         short_k, long_k = (atm, atm + 2*step) if is_bull else (atm, atm - 2*step)
         opt_type = "CE" if is_bull else "PE"
         max_loss = (2 * step + 0.25 * step) * lot
+
+        # Interactive Trade Monitor Inputs
+        st.markdown("#### 📥 Your Live Position Tracker")
+        c_in1, c_in2, c_in3 = st.columns(3)
+        entry_price = c_in1.number_input("Your Entry Spot Price:", value=float(atm), step=float(step))
+        holding_days = c_in2.number_input("Days In Trade:", min_value=0, max_value=30, value=2)
+        days_to_expiry = c_in3.number_input("Days Left to Expiry:", min_value=1, max_value=35, value=5)
+
+        # Dynamic Pricing & Yield Math
+        pts_moved = (hp - entry_price) if is_bull else (entry_price - hp)
+        estimated_pnl = (pts_moved * lot * 1.5) if pts_moved > step else (-max_loss * 0.3 if pts_moved < -step else 0.0)
+        pnl_pct_yield = round((estimated_pnl / max_loss) * 100, 1)
+
+        # Automated Adjustment Engine
+        if pnl_pct_yield >= 60.0:
+            status_box = "🟢 PROFIT HARVEST TRIGGERED (≥ 60% PROFIT)"
+            status_bg = "#0f421f"
+            action_text = f"**ACTION:** Book profits now! You have captured ~{pnl_pct_yield}% of max return. Exit both legs simultaneously before theta decay accelerates."
+        elif is_bull and hp >= long_k:
+            status_box = "🔵 RUNAWAY EXPANSION (UNLIMITED PROFIT ZONE)"
+            status_bg = "#0e2b4d"
+            new_sl_spot = round(long_k - 0.5 * step, 2)
+            action_text = f"**ACTION:** Spot price is above {long_k}. Your upside is now 100% UNLIMITED. Trail your spot stop loss to **{new_sl_spot}** and let it run."
+        elif not is_bull and hp <= long_k:
+            status_box = "🔵 RUNAWAY EXPANSION (UNLIMITED PROFIT ZONE)"
+            status_bg = "#0e2b4d"
+            new_sl_spot = round(long_k + 0.5 * step, 2)
+            action_text = f"**ACTION:** Spot price is below {long_k}. Your downside is now 100% UNLIMITED. Trail your spot stop loss to **{new_sl_spot}** and let it run."
+        elif is_bull and hp >= (atm + step) and days_to_expiry <= 3:
+            status_box = "🟠 ROLL LEGS ADJUSTMENT TRIGGER (PROFIT LOCK)"
+            status_bg = "#4d3208"
+            action_text = f"**ACTION:** Market is moving in your favor near expiry. Roll your sold **{short_k} CE** up to **{short_k + step} CE** to collect extra premium and eliminate maximum loss completely."
+        elif not is_bull and hp <= (atm - step) and days_to_expiry <= 3:
+            status_box = "🟠 ROLL LEGS ADJUSTMENT TRIGGER (PROFIT LOCK)"
+            status_bg = "#4d3208"
+            action_text = f"**ACTION:** Market is dropping near expiry. Roll your sold **{short_k} PE** down to **{short_k - step} PE** to collect extra premium and convert this trade into a risk-free position."
+        elif pts_moved < -step:
+            status_box = "🔴 ADVERSE MOVE / REPAIR PROTOCOL"
+            status_bg = "#4d0e14"
+            action_text = f"**ACTION:** Underlying trend has moved against your bias. Because this is an asymmetric hedge, your loss is strictly capped at ₹{max_loss:,.2f}. Do not add naked lots; let the hedge absorb the move or exit if structural trend breaks 50 EMA."
+        else:
+            status_box = "⚪ NEUTRAL CONSOLIDATION (HOLD POSITION)"
+            status_bg = "#1f242e"
+            action_text = f"**ACTION:** Trade is inside normal fluctuation range. No pricing adjustment required today. Let time decay subsidize the position."
+
+        # Render Live Status Banner
+        st.markdown(f"<div style='background:{status_bg};padding:15px;border-radius:8px;border:1px solid #555;margin:10px 0;'><h3 style='margin:0 0 8px 0;'>{status_box}</h3><p style='font-size:15px;margin:0;'>{action_text}</p></div>", unsafe_allow_html=True)
+
+        # Execution Metrics Cards
         b1, b2, b3 = st.columns(3)
-        b1.info(f"**Leg 1:** SELL 1x {short_k} {opt_type}")
-        b2.success(f"**Leg 2:** BUY 2x {long_k} {opt_type}")
-        b3.warning("**Upside:** 🚀 UNLIMITED")
-        st.metric("Max Capped Loss", f"₹{max_loss:,.2f}")
-        st.write("Daily Action: Exit if 60% max profit reached or roll legs on trend extension.")
+        b1.info(f"**Leg 1 (Sold Financer):**\n### SELL 1x {short_k} {opt_type}")
+        b2.success(f"**Leg 2 (Long Engine):**\n### BUY 2x {long_k} {opt_type}")
+        b3.warning(f"**Live Spot:** `{hp:,.2f}` | **Strike Gap:** `{abs(long_k - short_k)} pts`")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Max Capped Loss", f"₹{max_loss:,.2f}")
+        m2.metric("Max Profit Target", "UNLIMITED 🚀")
+        m3.metric("Estimated Trade P&L", f"₹{estimated_pnl:,.2f}", delta=f"{pnl_pct_yield}% Yield")
+        m4.metric("Days Left to Expiry", f"{days_to_expiry} Days")
+
+        st.markdown("---")
+        st.markdown("### 📋 Systematic Price Adjustment & Exit Checklist")
+        st.write(f"• **Profit Target (60% Rule):** If overall trade P&L hits **₹{max_loss * 0.60:,.2f}**, immediately close both legs.")
+        st.write(f"• **Runaway Profit Rule:** When spot crosses **{long_k}**, the trade cannot lose. Hold until end of expiry day or trailing stop hit.")
+        st.write(f"• **Expiry Day Zero Risk Roll:** On Wednesday/Thursday, if price is between {short_k} and {long_k}, roll the sold leg closer to spot to collect final theta burn.")
 
 # --- apy.py complete ---
