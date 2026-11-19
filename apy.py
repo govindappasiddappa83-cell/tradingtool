@@ -9,27 +9,38 @@ import pytz
 import requests
 
 st.set_page_config(
-    page_title="Professional Quant Terminal | Pro Edition",
+    page_title="Professional Quant Terminal | GS Macro Edition",
     layout="wide",
     page_icon="⚡",
     initial_sidebar_state="expanded"
 )
 
 # ========================================================
-# 1. CORE TIME & SYMBOL REGISTRY
+# 1. CORE ASSET & MACRO CURRENCY REGISTRY
 # ========================================================
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
 ASSET_SPECS = {
-    "NIFTY 50 (NSE)": {"symbol": "^NSEI", "strike_step": 50, "lot_size": 25},
-    "BANK NIFTY (NSE)": {"symbol": "^NSEBANK", "strike_step": 100, "lot_size": 15},
-    "FIN NIFTY (NSE)": {"symbol": "NIFTY_FIN_SERVICE.NS", "strike_step": 50, "lot_size": 40},
-    "MIDCP NIFTY (NSE)": {"symbol": "NIFTY_MID_SELECT.NS", "strike_step": 25, "lot_size": 50},
-    "SENSEX (BSE)": {"symbol": "^BSESN", "strike_step": 100, "lot_size": 10},
-    "COMEX Gold": {"symbol": "GC=F", "strike_step": 5, "lot_size": 1},
-    "S&P 500 (US)": {"symbol": "^GSPC", "strike_step": 10, "lot_size": 1},
-    "Custom": {"symbol": "CUSTOM", "strike_step": 50, "lot_size": 1}
+    # Institutional Indices
+    "NIFTY 50 (NSE)": {"symbol": "^NSEI", "strike_step": 50, "lot_size": 25, "class": "Index"},
+    "BANK NIFTY (NSE)": {"symbol": "^NSEBANK", "strike_step": 100, "lot_size": 15, "class": "Index"},
+    "FIN NIFTY (NSE)": {"symbol": "NIFTY_FIN_SERVICE.NS", "strike_step": 50, "lot_size": 40, "class": "Index"},
+    "SENSEX (BSE)": {"symbol": "^BSESN", "strike_step": 100, "lot_size": 10, "class": "Index"},
+    "S&P 500 (US)": {"symbol": "^GSPC", "strike_step": 10, "lot_size": 1, "class": "Index"},
+
+    # Gold & Commodities
+    "COMEX Gold (GC=F)": {"symbol": "GC=F", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
+    "Spot Gold / USD (XAU/USD)": {"symbol": "XAUUSD=X", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
+
+    # Institutional FX / Currencies
+    "USD / INR (NSE FX)": {"symbol": "INR=X", "strike_step": 0.25, "lot_size": 1000, "class": "Forex"},
+    "EUR / USD": {"symbol": "EURUSD=X", "strike_step": 0.005, "lot_size": 10000, "class": "Forex"},
+    "GBP / USD": {"symbol": "GBPUSD=X", "strike_step": 0.005, "lot_size": 10000, "class": "Forex"},
+    "USD / JPY": {"symbol": "JPY=X", "strike_step": 0.5, "lot_size": 10000, "class": "Forex"},
+    "US Dollar Index (DXY)": {"symbol": "DX-Y.NYB", "strike_step": 0.5, "lot_size": 1, "class": "Macro Index"},
+
+    "Custom Asset": {"symbol": "CUSTOM", "strike_step": 50, "lot_size": 1, "class": "Custom"}
 }
 
 # ========================================================
@@ -113,7 +124,7 @@ def draw_chart(df, title, lines=None):
     if lines:
         for val, clr, txt in lines:
             if val and not np.isnan(val):
-                fig.add_hline(y=val, line=dict(color=clr, width=1.3, dash='dash'), annotation_text=f"{txt}: {val:,.2f}", row=1, col=1)
+                fig.add_hline(y=val, line=dict(color=clr, width=1.3, dash='dash'), annotation_text=f"{txt}: {val:,.4f}", row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#A277FF', width=1.3), name="RSI(14)"), 2, 1)
     fig.add_hline(y=70, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
     fig.add_hline(y=30, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
@@ -126,7 +137,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🥇 Gold (XAU/USD)", 
     "🎯 Intraday Option Momentum", 
     "📡 Multi-Asset Screener", 
-    "🏛️ Goldman Sachs QIS Quant Hub"
+    "🏛️ Goldman Sachs QIS Quant Hub (Gold & Currencies)"
 ])
 
 # ========================================================
@@ -200,7 +211,7 @@ with tab2:
     with colA: chosen_sym = st.selectbox("Select Target Index / Asset:", list(ASSET_SPECS.keys()))
     with colB: custom_t = st.text_input("Custom Symbol (if chosen):", value="RELIANCE.NS")
 
-    sym = custom_t if chosen_sym == "Custom" else ASSET_SPECS[chosen_sym]["symbol"]
+    sym = custom_t if chosen_sym == "Custom Asset" else ASSET_SPECS[chosen_sym]["symbol"]
     step = ASSET_SPECS[chosen_sym]["strike_step"]
     lot = ASSET_SPECS[chosen_sym]["lot_size"]
 
@@ -243,7 +254,7 @@ with tab2:
         is_bull = float(r['close']) >= float(r['ema_9']) >= float(r['ema_21'])
         is_bear = float(r['close']) < float(r['ema_9']) < float(r['ema_21'])
 
-        atm_strike = int(round(c_p / step) * step)
+        atm_strike = int(round(c_p / step) * step) if step >= 1 else round(c_p, 4)
         rec_opt = f"{atm_strike} CE" if is_bull else (f"{atm_strike} PE" if is_bear else "NO TRADE")
         sig_lbl = "CALL BUY 🟢" if is_bull else ("PUT BUY 🔴" if is_bear else "NEUTRAL ⚪")
 
@@ -252,10 +263,10 @@ with tab2:
 
         t1, t2, t3, t4, t5 = st.columns(5)
         t1.metric("Signal", sig_lbl)
-        t2.metric("Index Level", f"{c_p:,.2f}")
-        t3.metric("Recommended Strike", rec_opt)
-        t4.metric("SL Level", f"{sl:,.2f}")
-        t5.metric("Lot Sizing", f"{lots} Lots ({lots*lot} Qty)")
+        t2.metric("Index/Asset Level", f"{c_p:,.4f}" if c_p < 500 else f"{c_p:,.2f}")
+        t3.metric("Recommended Strike", str(rec_opt))
+        t4.metric("SL Level", f"{sl:,.4f}" if sl < 500 else f"{sl:,.2f}")
+        t5.metric("Lot Sizing", f"{lots} Lots ({lots*lot} Units)")
 
         ladder = [(sl, '#FFAA00', 'SL')]
         for i, mult in enumerate([1.5, 2.5, 3.5, 4.5, 5.5], 1):
@@ -280,14 +291,15 @@ with tab3:
     scan_list = [
         ("NIFTY 50", "^NSEI"),
         ("BANK NIFTY", "^NSEBANK"),
-        ("FIN NIFTY", "NIFTY_FIN_SERVICE.NS"),
-        ("MIDCAP NIFTY", "NIFTY_MID_SELECT.NS"),
-        ("SENSEX", "^BSESN"),
-        ("GOLD", "GC=F")
+        ("COMEX GOLD", "GC=F"),
+        ("USD / INR", "INR=X"),
+        ("EUR / USD", "EURUSD=X"),
+        ("GBP / USD", "GBPUSD=X"),
+        ("US DOLLAR INDEX", "DX-Y.NYB")
     ]
 
     results = []
-    with st.spinner("Scanning all market tickers..."):
+    with st.spinner("Scanning all multi-asset tickers..."):
         for name, ticker in scan_list:
             df = clean_data(yf.download(ticker, period="10d", interval="15m", progress=False))
             if df is not None:
@@ -296,24 +308,35 @@ with tab3:
                 if cp >= e9 >= e21: sig = "BULLISH BREAKOUT 🟢"
                 elif cp < e9 < e21: sig = "BEARISH BREAKDOWN 🔴"
                 else: sig = "CONSOLIDATION ⚪"
-                results.append({"Asset": name, "Ticker": ticker, "Last Price": round(cp, 2), "Signal": sig, "RSI (14)": round(rsi, 1)})
+                results.append({"Asset": name, "Ticker": ticker, "Last Price": round(cp, 4) if cp < 500 else round(cp, 2), "Signal": sig, "RSI (14)": round(rsi, 1)})
 
     if results:
         st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
 
 # ========================================================
-# TAB 4: GOLDMAN SACHS QIS QUANT HUB
+# TAB 4: GOLDMAN SACHS QIS QUANT HUB (GOLD & CURRENCIES)
 # ========================================================
 with tab4:
     st.subheader("🏛️ Goldman Sachs Quantitative Investment Strategies (QIS) Hub")
-    st.caption("Statistical Factor Model: Normalized Momentum Z-Score, Realized Volatility Targeting & Telegram Dispatcher")
+    st.caption("Institutional Multi-Asset Factor Model: Commodities (Gold), Forex Currencies & Global Indices")
+
+    # Filter Category selector
+    cat_filter = st.radio("Asset Class Filter:", ("All Assets", "Commodities (Gold)", "Currencies / Forex", "Indices"), horizontal=True)
+
+    def filter_assets(c):
+        if c == "Commodities (Gold)": return [k for k, v in ASSET_SPECS.items() if v.get("class") == "Commodity"]
+        if c == "Currencies / Forex": return [k for k, v in ASSET_SPECS.items() if v.get("class") in ["Forex", "Macro Index"]]
+        if c == "Indices": return [k for k, v in ASSET_SPECS.items() if v.get("class") == "Index"]
+        return list(ASSET_SPECS.keys())
+
+    selectable_assets = filter_assets(cat_filter)
 
     q_col1, q_col2 = st.columns([2, 1])
     with q_col1:
-        gs_asset = st.selectbox("Select Asset for Deep Quant Analysis:", list(ASSET_SPECS.keys()), index=0)
+        gs_asset = st.selectbox("Select Asset for Deep Quant Analysis:", selectable_assets, index=0)
         gs_meta = ASSET_SPECS[gs_asset]
     with q_col2:
-        target_vol = st.slider("Target Portfolio Volatility (%):", min_value=5.0, max_value=30.0, value=15.0, step=1.0) / 100.0
+        target_vol = st.slider("Target Portfolio Volatility (%):", min_value=5.0, max_value=30.0, value=12.0, step=1.0) / 100.0
 
     @st.cache_data(ttl=60)
     def compute_gs_quant(sym):
@@ -337,48 +360,55 @@ with tab4:
         z_val = float(last['z_score'])
         atr_val = float(last['atr'])
 
-        vol_scalar = np.clip(target_vol / max(r_vol, 0.05), 0.25, 2.0)
+        # Institutional Inverse Volatility Sizing
+        vol_scalar = np.clip(target_vol / max(r_vol, 0.04), 0.25, 2.5)
         risk_dist = atr_val * 1.5
         lot_sz = gs_meta.get("lot_size", 1)
         calc_lots = max(1, int(((max_risk_amount / (risk_dist + 1e-6)) * vol_scalar) / lot_sz))
 
         if z_val > 1.25 and p_price > float(last['sma_50']):
             q_signal, q_clr = "STRONG BUY 🟢", "#00FF66"
-            sl_v = round(p_price - risk_dist, 2)
-            tp1_v = round(p_price + 1.5*risk_dist, 2)
-            tp2_v = round(p_price + 2.5*risk_dist, 2)
+            sl_v = round(p_price - risk_dist, 4) if p_price < 500 else round(p_price - risk_dist, 2)
+            tp1_v = round(p_price + 1.5*risk_dist, 4) if p_price < 500 else round(p_price + 1.5*risk_dist, 2)
+            tp2_v = round(p_price + 2.5*risk_dist, 4) if p_price < 500 else round(p_price + 2.5*risk_dist, 2)
         elif z_val < -1.25 and p_price < float(last['sma_50']):
             q_signal, q_clr = "STRONG SHORT 🔴", "#FF4D4D"
-            sl_v = round(p_price + risk_dist, 2)
-            tp1_v = round(p_price - 1.5*risk_dist, 2)
-            tp2_v = round(p_price - 2.5*risk_dist, 2)
+            sl_v = round(p_price + risk_dist, 4) if p_price < 500 else round(p_price + risk_dist, 2)
+            tp1_v = round(p_price - 1.5*risk_dist, 4) if p_price < 500 else round(p_price - 1.5*risk_dist, 2)
+            tp2_v = round(p_price - 2.5*risk_dist, 4) if p_price < 500 else round(p_price - 2.5*risk_dist, 2)
         else:
             q_signal, q_clr = "EQUILIBRIUM / NEUTRAL ⚪", "#888888"
-            sl_v, tp1_v, tp2_v = round(p_price - risk_dist, 2), round(p_price + risk_dist, 2), round(p_price + 2*risk_dist, 2)
+            sl_v = round(p_price - risk_dist, 4) if p_price < 500 else round(p_price - risk_dist, 2)
+            tp1_v = round(p_price + risk_dist, 4) if p_price < 500 else round(p_price + risk_dist, 2)
+            tp2_v = round(p_price + 2*risk_dist, 4) if p_price < 500 else round(p_price + 2*risk_dist, 2)
 
+        # Executive Metrics
+        p_str = f"{p_price:,.4f}" if p_price < 500 else f"${p_price:,.2f}" if "Gold" in gs_asset else f"{p_price:,.2f}"
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Factor Signal", q_signal)
-        m2.metric("Momentum Z-Score", f"{z_val:.2f} σ")
-        m3.metric("Realized Volatility", f"{r_vol*100:.1f}%")
-        m4.metric("Vol Multiplier", f"{vol_scalar:.2f}x")
-        m5.metric("Target Lot Allocation", f"{calc_lots} Lots")
+        m1.metric("Quant Factor Signal", q_signal)
+        m2.metric("Asset Price", p_str)
+        m3.metric("Momentum Z-Score", f"{z_val:.2f} σ")
+        m4.metric("Realized Volatility", f"{r_vol*100:.1f}%")
+        m5.metric("Target Lot Allocation", f"{calc_lots} Lots ({calc_lots * lot_sz} Units)")
 
+        # Telegram Instant Dispatcher
         st.markdown("---")
         t_col1, t_col2 = st.columns([3, 1])
         with t_col1:
-            st.info(f"**Quant Setup Summary:** Entry: `{p_price:,.2f}` | Stop-Loss: `{sl_v:,.2f}` | Target 1: `{tp1_v:,.2f}` | Target 2: `{tp2_v:,.2f}`")
+            st.info(f"**Quant Setup ({gs_meta.get('class')}):** Entry: `{p_str}` | Stop-Loss: `{sl_v}` | Target 1: `{tp1_v}` | Target 2: `{tp2_v}`")
         with t_col2:
             if st.button("📲 Send Signal to Telegram", type="primary"):
                 tg_msg = (
                     f"⚡ *GOLDMAN SACHS QIS QUANT ALERT*\n"
                     f"Asset: *{gs_asset}* (`{gs_meta['symbol']}`)\n"
+                    f"Class: *{gs_meta.get('class')}*\n"
                     f"Signal: *{q_signal}*\n"
-                    f"Entry Price: `{p_price:,.2f}`\n"
-                    f"Stop-Loss: `{sl_v:,.2f}`\n"
-                    f"Target 1: `{tp1_v:,.2f}`\n"
-                    f"Target 2: `{tp2_v:,.2f}`\n"
+                    f"Entry Price: `{p_str}`\n"
+                    f"Stop-Loss: `{sl_v}`\n"
+                    f"Target 1: `{tp1_v}`\n"
+                    f"Target 2: `{tp2_v}`\n"
                     f"Realized Vol: `{r_vol*100:.1f}%` (Scaler: {vol_scalar:.2f}x)\n"
-                    f"Position Size: `{calc_lots} Lots`"
+                    f"Quant Allocation: `{calc_lots} Lots` ({calc_lots * lot_sz} Units)"
                 )
                 success = send_telegram(tg_msg)
                 if success:
@@ -386,6 +416,7 @@ with tab4:
                 else:
                     st.error("Telegram error: Please verify your Bot Token & Chat ID in the sidebar.")
 
+        # Quant Factor Charts
         fig_gs = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.7, 0.3])
         fig_gs.add_trace(go.Candlestick(x=gs_df.index, open=gs_df['open'], high=gs_df['high'], low=gs_df['low'], close=gs_df['close'], name="Price"), 1, 1)
         fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['sma_20'], line=dict(color='yellow', width=1.2), name="Fast SMA (20)"), 1, 1)
@@ -393,6 +424,7 @@ with tab4:
         fig_gs.add_hline(y=sl_v, line=dict(color='#FF4D4D', dash='dash'), annotation_text="Quant SL", row=1, col=1)
         fig_gs.add_hline(y=tp1_v, line=dict(color='#00FF66', dash='dash'), annotation_text="Target 1", row=1, col=1)
 
+        # Z-Score Subplot
         fig_gs.add_trace(go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Momentum Z-Score"), 2, 1)
         fig_gs.add_hline(y=1.25, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
         fig_gs.add_hline(y=-1.25, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
