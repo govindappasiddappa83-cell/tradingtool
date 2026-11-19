@@ -1,0 +1,29 @@
+name: GS Quant Autonomous Cloud Engine
+
+on:
+  schedule:
+    # Runs automatically every hour on weekdays (Monday - Friday)
+    - cron: '0 * * * 1-5'
+  workflow_dispatch: # Allows manual trigger from the GitHub web UI anytime
+
+jobs:
+  run-quant-strategy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Cloud Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Quant Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Goldman Sachs Strategy Engine
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
