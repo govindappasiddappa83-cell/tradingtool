@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import pytz
 
-st.set_page_config(page_title="Quant & Asymmetric Hedging Terminal", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Professional Quant & Hedging Terminal", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
 
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
@@ -20,6 +20,7 @@ ASSET_SPECS = {
     "SENSEX (BSE)": {"symbol": "^BSESN", "strike_step": 100, "lot_size": 10, "class": "Index"},
     "RELIANCE (NSE)": {"symbol": "RELIANCE.NS", "strike_step": 20, "lot_size": 250, "class": "Stock"},
     "HDFC BANK (NSE)": {"symbol": "HDFCBANK.NS", "strike_step": 10, "lot_size": 550, "class": "Stock"},
+    "Spot Gold / USD": {"symbol": "XAUUSD=X", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
     "COMEX Gold": {"symbol": "GC=F", "strike_step": 5, "lot_size": 1, "class": "Commodity"},
     "USD / INR": {"symbol": "INR=X", "strike_step": 0.25, "lot_size": 1000, "class": "Forex"},
     "EUR / USD": {"symbol": "EURUSD=X", "strike_step": 0.005, "lot_size": 10000, "class": "Forex"}
@@ -32,10 +33,11 @@ TF_CONFIG = {
     "1D": {"interval": "1d", "period": "1y", "resample": None}
 }
 
+# --- SIDEBAR ENGINE ---
 with st.sidebar:
     st.markdown("### ⚙️ Terminal Settings")
     auto_refresh = st.checkbox("🔄 Enable Auto-Refresh", value=False)
-    refresh_rate = st.selectbox("Interval (sec):", (30, 60, 120, 300), index=1)
+    refresh_rate = st.selectbox("Interval (sec):", (15, 30, 60, 120), index=1)
     enable_audio = st.checkbox("🔔 Audio Alert on Setups", value=True)
     if auto_refresh:
         st.markdown(f"<script>setTimeout(function(){{ window.parent.postMessage({{type: 'streamlit:rerun'}}, '*'); }}, {refresh_rate * 1000});</script>", unsafe_allow_html=True)
@@ -44,20 +46,19 @@ with st.sidebar:
     account_capital = st.number_input("Capital (₹ / $):", min_value=1000.0, value=200000.0, step=10000.0)
     risk_pct = st.slider("Risk Per Trade (%):", min_value=0.25, max_value=5.0, value=1.0, step=0.25)
     max_risk_amount = (account_capital * risk_pct) / 100.0
-    st.info(f"Max Loss Allowed: **{max_risk_amount:,.2f}**")
+    st.info(f"Max Loss Cap: **{max_risk_amount:,.2f}**")
 
 def trigger_audio():
     if enable_audio:
         st.markdown("<script>try{var c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(880,c.currentTime);g.gain.setValueAtTime(0.2,c.currentTime);o.start();g.gain.exponentialRampToValueAtTime(0.0001,c.currentTime+0.5);o.stop(c.currentTime+0.5);}catch(e){}</script>", unsafe_allow_html=True)
 
+# --- QUANT & DATA PROCESSING ---
 def clean_cols(df):
     if df is None or df.empty: return None
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(c).lower() for c in df.columns]
     req = ['open', 'high', 'low', 'close', 'volume']
-    if not all(c in df.columns for c in req): return None
-    return df[req].dropna().copy()
+    return df[req].dropna().copy() if all(c in df.columns for c in req) else None
 
 def compute_indicators(df):
     if df is None or len(df) < 15: return None
@@ -72,11 +73,14 @@ def compute_indicators(df):
     df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
     return df
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10)
 def load_feed(symbol, tf_key):
     cfg = TF_CONFIG[tf_key]
     raw = yf.download(symbol, period=cfg["period"], interval=cfg["interval"], progress=False)
     df = clean_cols(raw)
+    if (df is None or df.empty) and symbol in ["XAUUSD=X", "GC=F"]:
+        alt = "GC=F" if symbol == "XAUUSD=X" else "XAUUSD=X"
+        df = clean_cols(yf.download(alt, period=cfg["period"], interval=cfg["interval"], progress=False))
     if df is None or df.empty: return None
     if cfg["resample"]:
         df = df.resample(cfg["resample"]).agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna()
@@ -89,21 +93,21 @@ def draw_chart(df, title, lines=None, sub_trace=None):
     fig.add_trace(go.Scatter(x=df.index, y=df['ema_21'], line=dict(color='magenta', width=1.2), name="EMA 21"), 1, 1)
     if lines:
         for val, clr, txt in lines:
-            if val and not np.isnan(val):
+            if val is not None and not np.isnan(val):
                 fmt = f"{val:,.4f}" if val < 500 else f"{val:,.2f}"
-                fig.add_hline(y=val, line=dict(color=clr, width=1.3, dash='dash'), annotation_text=f"{txt}: {fmt}", row=1, col=1)
+                fig.add_hline(y=val, line=dict(color=clr, width=1.4, dash='dash'), annotation_text=f"{txt}: {fmt}", row=1, col=1)
     if sub_trace:
         fig.add_trace(sub_trace[0], 2, 1)
         for h_y, h_c in sub_trace[1]:
             fig.add_hline(y=h_y, line=dict(color=h_c, dash='dot'), row=2, col=1)
     else:
-        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#A277FF', width=1.3), name="RSI(14)"), 2, 1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#A277FF', width=1.3), name="RSI"), 2, 1)
         fig.add_hline(y=70, line=dict(color='#FF4D4D', dash='dot'), row=2, col=1)
         fig.add_hline(y=30, line=dict(color='#00FF66', dash='dot'), row=2, col=1)
     fig.update_layout(title=title, height=450, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
     return fig
 
-# HEADER
+# --- TOP HEADER ---
 top_c1, top_c2 = st.columns([3, 1.2])
 top_c1.markdown(f"**Live Market Clock (IST):** `{now_ist.strftime('%d %b %Y | %H:%M:%S')}`")
 if top_c2.button("🔄 Refresh Data & Clear Cache", type="primary", use_container_width=True):
@@ -118,47 +122,77 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🚀 Asymmetric Unlimited Profit Hedging"
 ])
 
-# TAB 1: GOLD
+# ========================================================
+# TAB 1: GOLD (XAU/USD) EXECUTION HUB
+# ========================================================
 with tab1:
-    st.subheader("🥇 Gold (XAU/USD) Execution Hub")
-    gc1, gc2 = st.columns([2.5, 1.5])
-    g_strat = gc1.radio("Strategy:", ("ULTRA V1.2", "VWAP + 9 EMA", "125-Bar Breakout"), horizontal=True)
+    st.subheader("🥇 Gold (XAU/USD) Real-Time Execution Engine")
+    gc1, gc2, gc3 = st.columns([2.0, 1.0, 1.2])
+    g_strat = gc1.radio("Strategy:", ("VWAP + 9 EMA (Institutional)", "ULTRA V1.2 (R:R Ladder)", "125-Bar Breakout"), horizontal=True)
     g_tf = gc2.selectbox("Timeframe:", ["3M", "15M", "1H", "1D"], index=1, key="gtf")
+    g_feed = gc3.selectbox("Feed:", ["Spot Gold (XAUUSD=X)", "COMEX Gold (GC=F)"], index=0)
+    g_sym = "XAUUSD=X" if "Spot" in g_feed else "GC=F"
 
-    gdf = load_feed("GC=F", g_tf)
+    gdf = load_feed(g_sym, g_tf)
     if gdf is not None and len(gdf) >= 15:
         r = gdf.iloc[-1]
-        cp, atr = float(r['close']), float(r['atr'])
-        if g_strat == "ULTRA V1.2":
-            is_sell = cp < float(r['ema_9']) < float(r['ema_21'])
-            sig = "SELL 🔴" if is_sell else "BUY 🟢"
-            sl = cp + atr if is_sell else cp - atr
-            tp1, tp2 = (cp - 1.5*atr, cp - 2.5*atr) if is_sell else (cp + 1.5*atr, cp + 2.5*atr)
-            pos_oz = max(1, int(max_risk_amount / (atr + 1e-6)))
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric(f"Signal ({g_tf})", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("SL", f"${sl:,.2f}"); c4.metric("TP1", f"${tp1:,.2f}"); c5.metric("Size", f"{pos_oz} Oz")
-            st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold ULTRA V1.2 ({g_tf})", [(sl, '#FF4D4D', 'SL'), (tp1, '#00FF66', 'TP1'), (tp2, '#00E5FF', 'TP2')]), use_container_width=True)
-        elif g_strat == "VWAP + 9 EMA":
-            gdf['date'] = gdf.index.date
-            tp = (gdf['high'] + gdf['low'] + gdf['close']) / 3.0
-            gdf['vwap'] = (tp * gdf['volume']).groupby(gdf['date']).cumsum() / (gdf['volume'].groupby(gdf['date']).cumsum() + 1e-9)
-            vwap, e9 = float(gdf.iloc[-1]['vwap']), float(gdf.iloc[-1]['ema_9'])
-            sig = "BUY 🟢" if (cp > vwap and e9 > vwap) else ("SELL 🔴" if (cp < vwap and e9 < vwap) else "WAIT ⚪")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Signal", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("VWAP", f"${vwap:,.2f}"); c4.metric("EMA 9", f"${e9:,.2f}")
-            st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold VWAP + EMA ({g_tf})", [(vwap, 'orange', 'VWAP')]), use_container_width=True)
-        else:
-            lb_bars = 60 if g_tf in ["3M", "15M"] else 125
-            gdf['h_break'] = gdf['high'].shift(1).rolling(lb_bars).max()
-            h_val = float(gdf.iloc[-1]['h_break'])
-            sig = "BREAKOUT BUY 🟢" if cp >= h_val else "RANGE ⚪"
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Signal", sig); c2.metric("Price", f"${cp:,.2f}"); c3.metric("Breakout Level", f"${h_val:,.2f}")
-            st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold Breakout ({g_tf})", [(h_val, 'orange', 'BO Level')]), use_container_width=True)
-    else:
-        st.warning(f"Data currently unavailable for Gold on {g_tf}.")
+        cp = float(r['close'])
+        atr = float(r['atr']) if ('atr' in r and not np.isnan(r['atr'])) else (cp * 0.004)
+        e9, e21 = float(r['ema_9']), float(r['ema_21'])
 
-# TAB 2: OPTION MOMENTUM
+        # Institutional VWAP
+        gdf['date'] = gdf.index.date
+        tp = (gdf['high'] + gdf['low'] + gdf['close']) / 3.0
+        gdf['vwap'] = (tp * gdf['volume']).groupby(gdf['date']).cumsum() / (gdf['volume'].groupby(gdf['date']).cumsum() + 1e-9)
+        vwap_val = float(gdf.iloc[-1]['vwap']) if not np.isnan(gdf.iloc[-1]['vwap']) else e21
+
+        if "VWAP" in g_strat:
+            is_buy = (cp > vwap_val and e9 > vwap_val)
+            is_sell = (cp < vwap_val and e9 < vwap_val)
+            sig = "STRONG BUY 🟢" if is_buy else ("STRONG SELL 🔴" if is_sell else "NEUTRAL WAIT ⚪")
+            sl = round(min(vwap_val - 1.5, cp - 1.2 * atr), 2) if is_buy else (round(max(vwap_val + 1.5, cp + 1.2 * atr), 2) if is_sell else round(cp - atr, 2))
+            tp1 = round(cp + 1.5 * abs(cp - sl), 2) if (is_buy or not is_sell) else round(cp - 1.5 * abs(cp - sl), 2)
+            tp2 = round(cp + 2.5 * abs(cp - sl), 2) if (is_buy or not is_sell) else round(cp - 2.5 * abs(cp - sl), 2)
+        elif "ULTRA" in g_strat:
+            is_sell = cp < e9 < e21
+            sig = "SELL 🔴" if is_sell else "BUY 🟢"
+            sl = round(cp + atr if is_sell else cp - atr, 2)
+            tp1 = round(cp - 1.5 * atr if is_sell else cp + 1.5 * atr, 2)
+            tp2 = round(cp - 2.5 * atr if is_sell else cp + 2.5 * atr, 2)
+        else:
+            lb = 40 if g_tf in ["3M", "15M"] else 125
+            gdf['h_break'] = gdf['high'].shift(1).rolling(min(lb, len(gdf)-1)).max()
+            h_val = float(gdf.iloc[-1]['h_break'])
+            sig = "BREAKOUT BUY 🟢" if cp >= h_val else "CONSOLIDATION ⚪"
+            sl = round(cp - 1.5 * atr, 2)
+            tp1 = round(cp + 2.0 * atr, 2)
+            tp2 = round(cp + 3.5 * atr, 2)
+
+        risk_dist = max(1.0, abs(cp - sl))
+        pos_oz = max(1, int(max_risk_amount / risk_dist))
+
+        # Always-visible 5 core metrics
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Signal", sig)
+        m2.metric("Live Gold Price", f"${cp:,.2f}")
+        m3.metric("Stop Loss (SL)", f"${sl:,.2f}", delta=f"{sl-cp:,.2f}$")
+        m4.metric("Target 1 (TP1)", f"${tp1:,.2f}", delta=f"{tp1-cp:,.2f}$")
+        m5.metric("Target 2 (TP2)", f"${tp2:,.2f}", delta=f"{tp2-cp:,.2f}$")
+
+        s1, s2, s3 = st.columns(3)
+        s1.info(f"Position Sizing: **{pos_oz} Oz** (Risk Cap: ${max_risk_amount:,.2f})")
+        s2.info(f"Session VWAP: **${vwap_val:,.2f}** | 9 EMA: **${e9:,.2f}**")
+        s3.info(f"ATR (14 Volatility): **${atr:,.2f}**")
+
+        lines = [(sl, '#FF4D4D', 'SL'), (tp1, '#00FF66', 'TP1'), (tp2, '#00E5FF', 'TP2')]
+        if "VWAP" in g_strat and not np.isnan(vwap_val): lines.append((vwap_val, 'orange', 'VWAP'))
+        st.plotly_chart(draw_chart(gdf.iloc[-90:], f"Gold Execution ({g_tf}) | Feed: {g_sym}", lines), use_container_width=True)
+    else:
+        st.warning("Fetching fresh Gold feed... Click 'Refresh Data & Clear Cache' above.")
+
+# ========================================================
+# TAB 2: INTRADAY OPTION MOMENTUM
+# ========================================================
 with tab2:
     st.subheader("🎯 Options Strike Selection & Multi-TF Confluence (3M, 15M, 1H, 1D)")
     chosen_sym = st.selectbox("Select Asset:", list(ASSET_SPECS.keys()))
@@ -202,11 +236,13 @@ with tab2:
                 ladder = [(sl, '#FFAA00', 'SL')] + [(c_p + m*atr if is_bull else c_p - m*atr, '#00FF66' if is_bull else '#FF4D4D', f"T{i}") for i, m in enumerate([1.5, 2.5, 3.5], 1)]
                 st.plotly_chart(draw_chart(df.iloc[-90:], f"{chosen_sym} ({tf_key})", ladder), use_container_width=True)
 
-# TAB 3: SCREENER
+# ========================================================
+# TAB 3: REAL-TIME MULTI-ASSET SCREENER
+# ========================================================
 with tab3:
     st.subheader("📡 Real-Time Multi-Asset Scanner")
     scanner_tf = st.selectbox("Select Timeframe:", ["3M", "15M", "1H", "1D"], index=1)
-    scan_list = [("NIFTY 50", "^NSEI"), ("BANK NIFTY", "^NSEBANK"), ("FIN NIFTY", "NIFTY_FIN_SERVICE.NS"), ("RELIANCE", "RELIANCE.NS"), ("HDFC BANK", "HDFCBANK.NS"), ("COMEX GOLD", "GC=F"), ("USD / INR", "INR=X"), ("EUR / USD", "EURUSD=X")]
+    scan_list = [("NIFTY 50", "^NSEI"), ("BANK NIFTY", "^NSEBANK"), ("FIN NIFTY", "NIFTY_FIN_SERVICE.NS"), ("RELIANCE", "RELIANCE.NS"), ("HDFC BANK", "HDFCBANK.NS"), ("SPOT GOLD", "XAUUSD=X"), ("USD / INR", "INR=X"), ("EUR / USD", "EURUSD=X")]
     results = []
     with st.spinner(f"Scanning tickers on {scanner_tf}..."):
         for name, ticker in scan_list:
@@ -219,7 +255,9 @@ with tab3:
     if results:
         st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
 
-# TAB 4: GOLDMAN SACHS QUANT HUB
+# ========================================================
+# TAB 4: GOLDMAN SACHS QIS QUANT HUB
+# ========================================================
 with tab4:
     st.subheader("🏛️ Goldman Sachs QIS Factor Model")
     f1, f2, f3 = st.columns([1.5, 1.0, 1.0])
@@ -263,7 +301,9 @@ with tab4:
         z_trace = (go.Scatter(x=gs_df.index, y=gs_df['z_score'], line=dict(color='#00E5FF', width=1.5), name="Z-Score"), [(z_threshold, '#00FF66'), (-z_threshold, '#FF4D4D')])
         st.plotly_chart(draw_chart(gs_df.iloc[-90:], f"Goldman Sachs Factor Engine: {gs_asset} ({gs_tf})", gs_lines, sub_trace=z_trace), use_container_width=True)
 
+# ========================================================
 # TAB 5: ASYMMETRIC UNLIMITED PROFIT HEDGING
+# ========================================================
 with tab5:
     st.subheader("🚀 Asymmetric Unlimited Profit Hedging & Daily Adjuster")
     st.caption("Ratio Volatility Backspread: Capped Downside with 100% Unlimited Open-Ended Profit")
@@ -280,28 +320,24 @@ with tab5:
 
         if is_bullish:
             strat_title = "Call Ratio Backspread (Capped Loss + Unlimited Upside)"
-            short_strike, long_strike = atm, atm + (2 * h_step)
-            leg1 = f"SELL 1x {short_strike} CE (Financer)"
-            leg2 = f"BUY 2x {long_strike} CE (Unlimited Engine)"
-            p_short, p_long = round(h_step * 1.8, 1), round(h_step * 0.9, 1)
-            net_debit = (2 * p_long) - p_short
-            max_loss_rupees = ((long_strike - short_strike) + net_debit) * h_lot
-            breakeven = long_strike + ((long_strike - short_strike) + net_debit)
-            px_range = np.linspace(short_strike - (3 * h_step), long_strike + (6 * h_step), 50)
-            payoffs = [(-max(0, p - short_strike) + p_short + 2 * (max(0, p - long_strike) - p_long)) * h_lot for p in px_range]
-            adjust_advice = f"If price rallies above {long_strike:,.0f}, profit accelerates into UNLIMITED territory. If market crashes, your loss is capped at ₹{abs(net_debit * h_lot):,.2f}."
+            short_k, long_k = atm, atm + (2 * h_step)
+            leg1 = f"SELL 1x {short_k} CE (Financer)"
+            leg2 = f"BUY 2x {long_k} CE (Unlimited Engine)"
+            net_debit = round(h_step * 0.25, 1)
+            max_loss_rs = ((long_k - short_k) + net_debit) * h_lot
+            px_range = np.linspace(short_k - (2 * h_step), long_k + (5 * h_step), 40)
+            payoffs = [(-max(0, p - short_k) + 1.8*h_step + 2 * (max(0, p - long_k) - 0.9*h_step)) * h_lot for p in px_range]
+            adv = f"If price rallies above {long_k}, profit expands without limit. If market crashes, your loss is capped at ₹{abs(net_debit * h_lot):,.2f}."
         else:
             strat_title = "Put Ratio Backspread (Capped Loss + Unlimited Downside)"
-            short_strike, long_strike = atm, atm - (2 * h_step)
-            leg1 = f"SELL 1x {short_strike} PE (Financer)"
-            leg2 = f"BUY 2x {long_strike} PE (Unlimited Engine)"
-            p_short, p_long = round(h_step * 1.8, 1), round(h_step * 0.9, 1)
-            net_debit = (2 * p_long) - p_short
-            max_loss_rupees = ((short_strike - long_strike) + net_debit) * h_lot
-            breakeven = long_strike - ((short_strike - long_strike) + net_debit)
-            px_range = np.linspace(long_strike - (6 * h_step), short_strike + (3 * h_step), 50)
-            payoffs = [(-max(0, short_strike - p) + p_short + 2 * (max(0, long_strike - p) - p_long)) * h_lot for p in px_range]
-            adjust_advice = f"If price drops below {long_strike:,.0f}, profit accelerates into UNLIMITED territory. If market rallies, your loss is capped at ₹{abs(net_debit * h_lot):,.2f}."
+            short_k, long_k = atm, atm - (2 * h_step)
+            leg1 = f"SELL 1x {short_k} PE (Financer)"
+            leg2 = f"BUY 2x {long_k} PE (Unlimited Engine)"
+            net_debit = round(h_step * 0.25, 1)
+            max_loss_rs = ((short_k - long_k) + net_debit) * h_lot
+            px_range = np.linspace(long_k - (5 * h_step), short_k + (2 * h_step), 40)
+            payoffs = [(-max(0, short_k - p) + 1.8*h_step + 2 * (max(0, long_k - p) - 0.9*h_step)) * h_lot for p in px_range]
+            adv = f"If price falls below {long_k}, profit expands without limit. If market rallies, your loss is capped at ₹{abs(net_debit * h_lot):,.2f}."
 
         st.markdown(f"### Strategy: **{strat_title}**")
         b1, b2, b3 = st.columns(3)
@@ -310,7 +346,7 @@ with tab5:
         b3.warning(f"**Upside Model:** 🚀 UNLIMITED")
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("Max Capped Loss", f"₹{max_loss_rupees:,.2f}")
+        m1.metric("Max Capped Loss", f"₹{max_loss_rs:,.2f}")
         m2.metric("Max Profit", "UNLIMITED 🚀")
         m3.metric("Crash Risk Buffer", f"Capped at ₹{abs(net_debit * h_lot):,.2f}")
 
@@ -318,12 +354,11 @@ with tab5:
         fig_p.add_trace(go.Scatter(x=px_range, y=payoffs, mode='lines', line=dict(color='#00FF66', width=2.5), name="Payoff (₹)"))
         fig_p.add_hline(y=0, line=dict(color='#888888', dash='dot'))
         fig_p.add_vline(x=h_price, line=dict(color='#00E5FF', dash='dash'), annotation_text="Spot")
-        fig_p.update_layout(title="Asymmetric Payoff Curve", height=350, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
+        fig_p.update_layout(title="Asymmetric Payoff Curve", height=320, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10))
         st.plotly_chart(fig_p, use_container_width=True)
 
         st.markdown("### 🛠️ Daily Trade Adjustment Protocol")
-        st.write(f"1. **Execution Rule:** Enter both legs simultaneously on expiry week (Wednesday/Thursday for Nifty/Bank Nifty).")
-        st.write(f"2. **Daily Action:** {adjust_advice}")
-        st.write(f"3. **Breakeven Line:** Once price crosses **{breakeven:,.1f}**, trail with a trailing stop loss on Spot Price.")
+        st.write(f"1. **Execution Rule:** Enter both legs simultaneously on weekly options.")
+        st.write(f"2. **Daily Action:** {adv}")
 
 # --- apy.py complete ---
