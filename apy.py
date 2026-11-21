@@ -310,3 +310,104 @@ with main_tab2:
             high_125 = round(row['high_125'], 2)
             atr_val = round(row['atr'], 2)
             vol_ratio = round(row['volume'] / (row['vol_sma_125'] +
+            vol_ratio = round(row['volume'] / (row['vol_sma_125'] + 1e-9), 2)
+            pct_from_high = round(((close - high_125) / high_125) * 100, 2)
+
+            cond_a = close >= high_125
+            cond_b = vol_ratio >= 1.0
+            cond_c = row['rsi'] < 70
+            cond_d = row['atr'] > row['atr_sma_50']
+            cond_e = row['close'] > row['sma_50']
+            cond_f = row['ema_21'] > row['ema_50']
+
+            is_buy = cond_a and cond_b
+            is_sell = row['ema_21'] < row['ema_50']
+            is_near = (-3.0 <= pct_from_high < 0.0) and (vol_ratio >= 0.8)
+
+            if is_buy:
+                signal_label = "🟢 BUY"
+            elif is_sell:
+                signal_label = "🔴 SELL"
+            elif is_near:
+                signal_label = "🟡 NEAR BUY"
+            else:
+                signal_label = "⚪ NEUTRAL"
+
+            confirm_score = sum([cond_c, cond_d, cond_e, cond_f])
+            age_min, is_fresh = check_freshness(df.index, tf_minutes)
+
+            return {
+                "Signal": signal_label,
+                "Stock": symbol,
+                "Price": f"₹{close:,.2f}",
+                "Breakout High": f"₹{high_125:,.2f}",
+                "Distance to High": f"{pct_from_high:+0.2f}%",
+                "Volume Surge": f"{vol_ratio}x Avg",
+                "RSI": round(row['rsi'], 1),
+                "Score": f"{confirm_score + (1 if cond_a else 0) + (1 if cond_b else 0)}/6",
+                "Stop Loss": f"₹{round(close - (2 * atr_val), 2):,.2f}",
+                "Target": f"₹{round(close + (4 * atr_val), 2):,.2f}",
+                "Fresh": "🟢" if is_fresh else "🔴 Stale",
+                "Is_Breakout": is_buy,
+                "Is_High_Volume": vol_ratio >= 1.2,
+                "Is_Near_Breakout": is_near,
+                "Is_Sell": is_sell,
+                "Raw_Volume": vol_ratio,
+                "Raw_Distance": pct_from_high
+            }
+        except Exception:
+            return None
+
+    @st.cache_data(ttl=600)
+    def run_clean_scan(tf_interval, tf_period, label_str):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(analyze_nse_stock, sym, tf_interval, tf_period, label_str): sym for sym in NIFTY_UNIVERSE}
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
+        return [r for r in results if r is not None]
+
+    col_btn1, col_btn2 = st.columns([3, 1])
+    with col_btn2:
+        if st.button("🔄 Force Re-Scan NSE", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    with st.spinner(f"Analyzing all stocks on {selected_tf.split('—')[0].strip()}..."):
+        all_results = run_clean_scan(interval, period, bar_label)
+
+    st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Volume Surge)")
+    breakouts = [r for r in all_results if r.get("Is_Breakout")]
+    if breakouts:
+        cols_bo = ["Signal", "Stock", "Price", "Breakout High", "Volume Surge", "Score", "Stop Loss", "Target", "RSI", "Fresh"]
+        df_bo = pd.DataFrame(breakouts)[[c for c in cols_bo if c in pd.DataFrame(breakouts).columns]]
+        st.dataframe(df_bo, use_container_width=True)
+    else:
+        st.info(f"ℹ️ No stocks currently meeting full breakout rules on {selected_tf.split('—')[0].strip()}.")
+
+    st.divider()
+
+    st.subheader("⚡ 2. Top Volume Movers Today")
+    vol_movers = sorted([r for r in all_results if r.get("Is_High_Volume")], key=lambda x: x.get("Raw_Volume", 0), reverse=True)
+    if vol_movers:
+        cols_vol = ["Signal", "Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score", "Fresh"]
+        df_vol = pd.DataFrame(vol_movers)[[c for c in cols_vol if c in pd.DataFrame(vol_movers).columns]]
+        st.dataframe(df_vol, use_container_width=True)
+
+    st.divider()
+
+    st.subheader(f"🔭 3. Near-Breakout Radar (Within 3% of {bar_label} High)")
+    near_bo = sorted([r for r in all_results if r.get("Is_Near_Breakout")], key=lambda x: x.get("Raw_Distance", 0), reverse=True)
+    if near_bo:
+        cols_near = ["Signal", "Stock", "Price", "Breakout High", "Distance to High", "Volume Surge", "RSI", "Score", "Fresh"]
+        df_near = pd.DataFrame(near_bo)[[c for c in cols_near if c in pd.DataFrame(near_bo).columns]]
+        st.dataframe(df_near, use_container_width=True)
+
+    st.divider()
+
+    st.subheader("🔴 4. Trend Exit Alerts (21 EMA < 50 EMA)")
+    sells = [r for r in all_results if r.get("Is_Sell")]
+    if sells:
+        cols_sell = ["Signal", "Stock", "Price", "RSI", "Fresh"]
+        df_sells = pd.DataFrame(sells)[[c for c in cols_sell if c in pd.DataFrame(sells).columns]]
+        st.dataframe(df_sells, use_container_width=True)
+
+# app.py complete
