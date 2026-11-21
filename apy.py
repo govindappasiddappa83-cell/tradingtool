@@ -57,7 +57,7 @@ def compute_indicators(df):
 
 with main_tab1:
     gold_strategy = st.radio(
-        "🎯 **Choose Gold Strategy:**",
+        "🎯 Choose Gold Strategy:",
         ("Strategy 2: 30M Session VWAP + 9 EMA + PDH/PDL", "Strategy 1: 125-Bar Breakout + Volume (Multi-Timeframe)"),
         horizontal=True
     )
@@ -123,24 +123,24 @@ with main_tab1:
                 pd_status = "↔️ Trading Inside Previous Day Range"
 
             if is_bullish:
-                sig_html = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>🟢 STRONG BUY (Price & 9 EMA Above VWAP)</span>"
+                sig_html = "<span style='background-color:#004D20; color:#00FF66; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>🟢 STRONG BUY</span>"
                 sl_label = "Stop-Loss (Below VWAP / -1.5 ATR)"
                 sl_val = f"${min(cur_vwap - 1.0, round(cur_price - (1.5 * atr_30m), 2)):,.2f}"
                 tgt_label = "Target (+3 ATR, 1:2 RR)"
                 tgt_val = f"${round(cur_price + (3.0 * atr_30m), 2):,.2f}"
             elif is_bearish:
-                sig_html = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>🔴 STRONG SELL / SHORT (Price & 9 EMA Below VWAP)</span>"
+                sig_html = "<span style='background-color:#4D0000; color:#FF4D4D; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>🔴 STRONG SELL</span>"
                 sl_label = "Stop-Loss (Above VWAP / +1.5 ATR)"
                 sl_val = f"${max(cur_vwap + 1.0, round(cur_price + (1.5 * atr_30m), 2)):,.2f}"
                 tgt_label = "Target (-3 ATR, 1:2 RR)"
                 tgt_val = f"${round(cur_price - (3.0 * atr_30m), 2):,.2f}"
             else:
-                sig_html = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>⚪ NEUTRAL / CROSSING VWAP</span>"
+                sig_html = "<span style='background-color:#2A2A2A; color:#BBBBBB; padding:6px 14px; border-radius:6px; font-weight:bold; font-size:20px;'>⚪ NEUTRAL</span>"
                 sl_label, sl_val, tgt_label, tgt_val = "Stop-Loss", "-", "Target", "-"
 
             m1, m2, m3, m4 = st.columns([1.2, 2.2, 1.3, 1.3])
             m1.metric("Live Gold Price (30M)", f"${cur_price:,.2f}")
-            m2.markdown(f"**Signal**  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
+            m2.markdown(f"Signal  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
             m3.metric(sl_label, sl_val)
             m4.metric(tgt_label, tgt_val)
 
@@ -150,7 +150,7 @@ with main_tab1:
             c_chk2.metric("9 EMA (Close)", f"${cur_ema9:,.2f}")
             c_chk3.metric("PDH (Prev Day High)", f"${pdh_val:,.2f}")
             c_chk4.metric("PDL (Prev Day Low)", f"${pdl_val:,.2f}")
-            st.info(f"**PDH/PDL Context:** {pd_status}")
+            st.info(f"PDH/PDL Context: {pd_status}")
             st.divider()
 
             st.subheader("Gold 30-Minute Chart (Session VWAP + 9 EMA + PDH + PDL)")
@@ -171,7 +171,7 @@ with main_tab1:
         c_g1, c_g2 = st.columns([2, 1])
         with c_g1:
             gold_tf = st.radio(
-                "⏱️ **Select Gold Timeframe:**",
+                "⏱️ Select Gold Timeframe:",
                 ("Daily (1D) — Macro Swing", "4-Hour (4H) — Swing", "1-Hour (1H) — Intraday / Short-Term", "15-Minute (15M) — Scalp"),
                 horizontal=True
             )
@@ -241,29 +241,27 @@ with main_tab1:
 
             m1, m2, m3, m4 = st.columns([1.2, 2.2, 1.3, 1.3])
             m1.metric("Live Gold Price (USD)", f"${close:,.2f}")
-            m2.markdown(f"**Signal**  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
+            m2.markdown(f"Signal  \n<div style='margin-top:6px;'>{sig_html}</div>", unsafe_allow_html=True)
             m3.metric(sl_label, sl_val)
             m4.metric(tgt_label, tgt_val)
-
             st.metric("Confirmation Score (of 6 checks)", f"{score}/6")
             st.divider()
 
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=gold_df.index, open=gold_df['open'], high=gold_df['high'], low=gold_df['low'], close=gold_df['close'], name="Price"), row=1,
-            fig.add_trace(go.Candlestick(x=gold_df.index, open=gold_df['open'], high=gold_df['high'], low=gold_df['low'], close=gold_df['close'], name="Price"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['high_125'], line=dict(color='orange', dash='dash'), name=f"{g_bar_label} High"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_21'], line=dict(color='blue', width=1.5), name="21 EMA"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_50'], line=dict(color='red', width=1.5), name="50 EMA"), row=1, col=1)
-            v_colors = ['green' if c >= o else 'red' for c, o in zip(gold_df['close'], gold_df['open'])]
-            fig.add_trace(go.Bar(x=gold_df.index, y=gold_df['volume'], marker_color=v_colors, name="Volume"), row=2, col=1)
-            fig.update_layout(height=650, xaxis_rangeslider_visible=False, template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True)
+            fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+            fig2.add_trace(go.Candlestick(x=gold_df.index, open=gold_df['open'], high=gold_df['high'], low=gold_df['low'], close=gold_df['close'], name="Price"), row=1, col=1)
+            fig2.add_trace(go.Scatter(x=gold_df.index, y=gold_df['high_125'], line=dict(color='orange', dash='dash'), name=f"{g_bar_label} High"), row=1, col=1)
+            fig2.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_21'], line=dict(color='blue', width=1.5), name="21 EMA"), row=1, col=1)
+            fig2.add_trace(go.Scatter(x=gold_df.index, y=gold_df['ema_50'], line=dict(color='red', width=1.5), name="50 EMA"), row=1, col=1)
+            v_colors2 = ['green' if c >= o else 'red' for c, o in zip(gold_df['close'], gold_df['open'])]
+            fig2.add_trace(go.Bar(x=gold_df.index, y=gold_df['volume'], marker_color=v_colors2, name="Volume"), row=2, col=1)
+            fig2.update_layout(height=650, xaxis_rangeslider_visible=False, template="plotly_dark")
+            st.plotly_chart(fig2, use_container_width=True)
 
 with main_tab2:
     st.title("🇮🇳 NSE Institutional Volume & Breakout Tracker")
 
     selected_tf = st.radio(
-        "⏱️ **Select Strategy Timeframe:**",
+        "⏱️ Select Strategy Timeframe:",
         (
             "📅 Daily (1D) — Positional Swing (125-Day High / 6 Months)",
             "⏰ 1-Hour (1H) — Short-Term Swing (125-Hour High / ~20 Days)"
@@ -307,115 +305,8 @@ with main_tab2:
                 return None
 
             row = df.iloc[-1]
-            prev = df.iloc[-2]
 
             close = round(row['close'], 2)
             high_125 = round(row['high_125'], 2)
             atr_val = round(row['atr'], 2)
-            vol_ratio = round(row['volume'] / (row['vol_sma_125'] + 1e-9), 2)
-            pct_from_high = round(((close - high_125) / high_125) * 100, 2)
-
-            cond_a = close >= high_125
-            cond_b = vol_ratio >= 1.0
-            cond_c = row['rsi'] < 70
-            cond_d = row['atr'] > row['atr_sma_50']
-            cond_e = row['close'] > row['sma_50']
-            cond_f = row['ema_21'] > row['ema_50']
-
-            is_buy = cond_a and cond_b
-            is_sell = row['ema_21'] < row['ema_50']
-            is_near = (-3.0 <= pct_from_high < 0.0) and (vol_ratio >= 0.8)
-
-            if is_buy:
-                signal_label = "🟢 BUY"
-            elif is_sell:
-                signal_label = "🔴 SELL"
-            elif is_near:
-                signal_label = "🟡 NEAR BUY"
-            else:
-                signal_label = "⚪ NEUTRAL"
-
-            confirm_score = sum([cond_c, cond_d, cond_e, cond_f])
-
-            age_min, is_fresh = check_freshness(df.index, tf_minutes)
-
-            return {
-                "Signal": signal_label,
-                "Stock": symbol,
-                "Price": f"₹{close:,.2f}",
-                "Breakout High": f"₹{high_125:,.2f}",
-                "Distance to High": f"{pct_from_high:+0.2f}%",
-                "Volume Surge": f"{vol_ratio}x Avg",
-                "RSI": round(row['rsi'], 1),
-                "Score": f"{confirm_score + (1 if cond_a else 0) + (1 if cond_b else 0)}/6",
-                "Stop Loss": f"₹{round(close - (2 * atr_val), 2):,.2f}",
-                "Target": f"₹{round(close + (4 * atr_val), 2):,.2f}",
-                "Data Age (min)": round(age_min, 0),
-                "Fresh": "🟢" if is_fresh else "🔴 Stale",
-                "Is_Breakout": is_buy,
-                "Is_High_Volume": vol_ratio >= 1.2,
-                "Is_Near_Breakout": is_near,
-                "Is_Sell": is_sell,
-                "Raw_Volume": vol_ratio,
-                "Raw_Distance": pct_from_high
-            }
-        except Exception:
-            return None
-
-    @st.cache_data(ttl=600)
-    def run_clean_scan(tf_interval, tf_period, label_str):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(analyze_nse_stock, sym, tf_interval, tf_period, label_str): sym for sym in NIFTY_UNIVERSE}
-            results = [f.result() for f in concurrent.futures.as_completed(futures)]
-        return [r for r in results if r is not None]
-
-    col_btn1, col_btn2 = st.columns([3, 1])
-    with col_btn2:
-        if st.button("🔄 Force Re-Scan NSE", type="primary"):
-            st.cache_data.clear()
-            st.rerun()
-
-    with st.spinner(f"Analyzing all stocks on {selected_tf.split('—')[0].strip()}..."):
-        all_results = run_clean_scan(interval, period, bar_label)
-
-    stale_count = sum(1 for r in all_results if "Stale" in str(r.get("Fresh", "")))
-    if stale_count > 0:
-        st.warning(f"⚠️ {stale_count} of {len(all_results)} stocks returned stale data (older than expected for this timeframe).")
-
-    st.subheader(f"🎯 1. Active Breakouts ({bar_label} High + Volume Surge)")
-    breakouts = [r for r in all_results if r.get("Is_Breakout")]
-    if breakouts:
-        cols_bo = ["Signal", "Stock", "Price", "Breakout High", "Volume Surge", "Score", "Stop Loss", "Target", "RSI", "Fresh"]
-        df_bo = pd.DataFrame(breakouts)[[c for c in cols_bo if c in pd.DataFrame(breakouts).columns]]
-        st.dataframe(df_bo, use_container_width=True)
-    else:
-        st.info(f"ℹ️ No stocks currently meeting full breakout rules on {selected_tf.split('—')[0].strip()}.")
-
-    st.divider()
-
-    st.subheader("⚡ 2. Top Volume Movers Today")
-    vol_movers = sorted([r for r in all_results if r.get("Is_High_Volume")], key=lambda x: x.get("Raw_Volume", 0), reverse=True)
-    if vol_movers:
-        cols_vol = ["Signal", "Stock", "Price", "Volume Surge", "Distance to High", "RSI", "Score", "Fresh"]
-        df_vol = pd.DataFrame(vol_movers)[[c for c in cols_vol if c in pd.DataFrame(vol_movers).columns]]
-        st.dataframe(df_vol, use_container_width=True)
-
-    st.divider()
-
-    st.subheader(f"🔭 3. Near-Breakout Radar (Within 3% of {bar_label} High)")
-    near_bo = sorted([r for r in all_results if r.get("Is_Near_Breakout")], key=lambda x: x.get("Raw_Distance", 0), reverse=True)
-    if near_bo:
-        cols_near = ["Signal", "Stock", "Price", "Breakout High", "Distance to High", "Volume Surge", "RSI", "Score", "Fresh"]
-        df_near = pd.DataFrame(near_bo)[[c for c in cols_near if c in pd.DataFrame(near_bo).columns]]
-        st.dataframe(df_near, use_container_width=True)
-
-    st.divider()
-
-    st.subheader("🔴 4. Trend Exit Alerts (21 EMA < 50 EMA)")
-    sells = [r for r in all_results if r.get("Is_Sell")]
-    if sells:
-        cols_sell = ["Signal", "Stock", "Price", "RSI", "Fresh"]
-        df_sells = pd.DataFrame(sells)[[c for c in cols_sell if c in pd.DataFrame(sells).columns]]
-        st.dataframe(df_sells, use_container_width=True)
-
-# app.py complete
+            vol_ratio = round(row['volume'] / (row['vol_sma_125'] +
